@@ -12,7 +12,7 @@ import base64
 
 class DicomViewerState(rx.State):
     """State for managing DICOM file selection and loading."""
-    _default_dicom_dir: str = "/Users/Shared/DICOM" if sys.platform == "darwin" else ""
+    _default_dicom_dir: str = "/Users/Shared/DICOM" if (sys.platform == "darwin" or Path("/Users/Shared/DICOM").is_dir()) else ""
     _default_browser_dir: str = _default_dicom_dir or str(Path.home())
     directory_path: str = os.getenv("PUBLIC_DICOM_DIR", _default_dicom_dir)
     directory_browser_visible: bool = False
