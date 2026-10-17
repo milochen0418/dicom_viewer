@@ -6,8 +6,10 @@ authors = ["Milo Chen <milo_chen@mail2000.com.tw>"]
 packages = [{ include = "dicom_viewer" }]
 
 [tool.poetry.dependencies]
-python = ">=3.11,<3.12"
-reflex = "0.8.24.post1"
+# 3.11 floor: Reflex 0.10 and the re_ddns smart-launcher image (python:3.11).
+# <3.15 cap: numpy 2.4 (its last line for Python 3.11) has no CPython 3.15 wheels.
+python = ">=3.11,<3.15"
+reflex = "0.10.0"
 pydicom = "*"
 pillow = "*"
 numpy = "*"
