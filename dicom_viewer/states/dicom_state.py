@@ -1,36 +1,53 @@
 import reflex as rx
+import asyncio
 import os
-import sys
-import pydicom
-from pathlib import Path
 import logging
 import numpy as np
-from PIL import Image
-import io
-import base64
+
+from dicom_viewer import folders, series
+
+# Used when the files suggest no window of their own.
+DEFAULT_WINDOW = (40.0, 400.0)
+FILE_WINDOW = "From file"
+
+# Files whose headers are read between two progress updates while opening.
+_OPEN_BATCH = 16
+
+_SLICE_KEY_STEPS = {
+    "ArrowUp": -1,
+    "ArrowLeft": -1,
+    "ArrowDown": 1,
+    "ArrowRight": 1,
+    "PageUp": -10,
+    "PageDown": 10,
+}
 
 
 class DicomViewerState(rx.State):
-    """State for managing DICOM file selection and loading."""
-    _default_dicom_dir: str = "/Users/Shared/DICOM" if (sys.platform == "darwin" or Path("/Users/Shared/DICOM").is_dir()) else ""
-    _default_browser_dir: str = _default_dicom_dir or str(Path.home())
-    directory_path: str = os.getenv("PUBLIC_DICOM_DIR", _default_dicom_dir)
-    directory_browser_visible: bool = False
-    directory_browser_root: str = os.getenv("PUBLIC_DICOM_DIR", _default_browser_dir)
-    directory_browser_path: str = directory_browser_root
-    directory_browser_dirs: list[str] = []
-    directory_browser_error: str = ""
-    suppress_directory_dialog: bool = False
-    workflow_step: str = "select"
-    dicom_files: list[str] = []
-    file_names: list[str] = []
+    """State of the open series and how it is displayed."""
+    series_path: str = ""
+    series_name: str = ""
+    series_label: str = ""
+    total_images: int = 0
+    _series_files: list[str] = []
+    _series_window: tuple[float, float] = DEFAULT_WINDOW
+    _series_window_preset: str = ""
+    # Bumped when a different series is opened, so in-flight image work for
+    # the previous one is dropped.
+    _series_version: int = 0
+    opening: bool = False
+    opening_done: int = 0
+    opening_total: int = 0
+    open_error: str = ""
     current_index: int = 0
-    is_loading: bool = False
+    # The sliders are uncontrolled so they can be dragged; changing these keys
+    # remounts them at the state value after a change made by other means.
+    slice_slider_key: int = 0
+    window_slider_key: int = 0
     error_message: str = ""
-    has_loaded: bool = False
     current_image_base64: str = "/placeholder.svg"
-    window_center: float = 40.0
-    window_width: float = 400.0
+    window_center: float = DEFAULT_WINDOW[0]
+    window_width: float = DEFAULT_WINDOW[1]
     zoom_level: float = 1.0
     pan_x: int = 0
     pan_y: int = 0
@@ -57,6 +74,8 @@ class DicomViewerState(rx.State):
     _cached_pixel_array: np.ndarray | None = None
     _cached_rescale_slope: float = 1.0
     _cached_rescale_intercept: float = 0.0
+    _cached_index: int = -1
+    _refreshing: bool = False
     _default_tutorial_links: dict[str, str] = {
         # Use same-origin static assets so the tutorial can be embedded in an iframe.
         # (Many external sites, including Wikipedia, block iframe embedding.)
@@ -337,57 +356,9 @@ class DicomViewerState(rx.State):
 
     _metadata_password: str = os.getenv("DICOM_METADATA_PASSWORD", "dicom")
 
-    def _compute_slice_position(self, ds) -> float | None:
-        """Compute slice position along the normal direction when possible."""
-        pos = ds.get("ImagePositionPatient", None)
-        iop = ds.get("ImageOrientationPatient", None)
-        if pos is not None and iop is not None:
-            try:
-                if len(iop) >= 6 and len(pos) >= 3:
-                    row = np.array([float(x) for x in iop[:3]], dtype=float)
-                    col = np.array([float(x) for x in iop[3:6]], dtype=float)
-                    normal = np.cross(row, col)
-                    if np.linalg.norm(normal) > 0:
-                        position = float(np.dot(normal, np.array(pos[:3], dtype=float)))
-                        return position
-            except Exception:
-                pass
-        if pos is not None:
-            try:
-                if len(pos) >= 3:
-                    return float(pos[2])
-            except Exception:
-                pass
-        slice_location = ds.get("SliceLocation", None)
-        if slice_location is not None:
-            try:
-                return float(slice_location)
-            except Exception:
-                return None
-        return None
-
-    def _dicom_sort_key(self, ds, file_path: Path) -> tuple:
-        """Return a stable sort key for DICOM slice ordering."""
-        series_uid = str(ds.get("SeriesInstanceUID", ""))
-        position = self._compute_slice_position(ds)
-        instance = ds.get("InstanceNumber", None)
-        try:
-            instance_val = float(instance) if instance is not None else None
-        except Exception:
-            instance_val = None
-        primary = position if position is not None else (
-            instance_val if instance_val is not None else float("inf")
-        )
-        secondary = instance_val if instance_val is not None else float("inf")
-        return (series_uid, primary, secondary, file_path.name.lower())
-
-    @rx.var
-    def total_images(self) -> int:
-        return len(self.dicom_files)
-
     @rx.var
     def current_position_text(self) -> str:
-        if not self.dicom_files:
+        if not self.total_images:
             return "0 / 0"
         return f"{self.current_index + 1} / {self.total_images}"
 
@@ -396,206 +367,159 @@ class DicomViewerState(rx.State):
         return max(0, self.total_images - 1)
 
     @rx.var
-    def can_go_up_directory(self) -> bool:
-        current_path = self._normalize_directory_path(self.directory_browser_path)
-        base_path = self._normalize_directory_path(self.directory_browser_root)
-        return current_path != base_path
+    def opening_percent(self) -> int:
+        if not self.opening_total:
+            return 0
+        return round(100 * self.opening_done / self.opening_total)
 
     @rx.event
-    def set_directory(self, path: str):
-        """Update the directory path state."""
-        self.directory_path = path
-        if self.error_message:
-            self.error_message = ""
-
-    def _normalize_directory_path(self, path: str) -> Path:
-        candidate = Path(path).expanduser()
-        if candidate.exists() and candidate.is_dir():
-            return candidate
-        fallback = Path(self._default_browser_dir).expanduser()
-        return fallback if fallback.exists() and fallback.is_dir() else Path("/")
-
-    def _load_directory_entries(self, path: Path) -> None:
-        try:
-            dirs = sorted(
-                [p for p in path.iterdir() if p.is_dir()],
-                key=lambda p: p.name.lower(),
-            )
-            self.directory_browser_dirs = [str(p) for p in dirs]
-            self.directory_browser_error = ""
-        except PermissionError as e:
-            logging.exception(f"Error scanning directory: {e}")
-            self.directory_browser_dirs = []
-            self.directory_browser_error = (
-                "Permission denied when accessing this folder. "
-                "On macOS, grant Terminal/VS Code access to Desktop or "
-                "enable Full Disk Access in System Settings > Privacy & Security."
-            )
-        except Exception as e:
-            logging.exception(f"Error scanning directory: {e}")
-            self.directory_browser_dirs = []
-            self.directory_browser_error = f"Error accessing directory: {str(e)}"
-
-    @rx.event
-    def suppress_directory_dialog_once(self):
-        self.suppress_directory_dialog = True
-
-    @rx.event
-    def open_directory_dialog(self):
-        if self.suppress_directory_dialog:
-            self.suppress_directory_dialog = False
-            return
-        base_path = self.directory_path or self.directory_browser_path
-        path = self._normalize_directory_path(base_path)
-        self.directory_browser_path = str(path)
-        self.directory_browser_visible = True
-        self._load_directory_entries(path)
-
-    @rx.event
-    def close_directory_dialog(self):
-        self.directory_browser_visible = False
-
-    @rx.event
-    def go_up_directory(self):
-        if not self.can_go_up_directory:
-            return
-        path = self._normalize_directory_path(self.directory_browser_path).parent
-        self.directory_browser_path = str(path)
-        self._load_directory_entries(path)
-
-    @rx.event
-    def open_directory(self, path: str):
-        next_path = self._normalize_directory_path(path)
-        self.directory_browser_path = str(next_path)
-        self._load_directory_entries(next_path)
-
-    @rx.event
-    def select_current_directory(self):
-        self.directory_path = self.directory_browser_path
-        self.directory_browser_visible = False
-        if self.error_message:
-            self.error_message = ""
+    def dismiss_open_error(self):
+        self.open_error = ""
 
     @rx.event(background=True)
-    async def scan_directory(self):
-        """Scan the specified directory for DICOM files."""
+    async def open_series(self, folder: str):
+        """Read the DICOM files in `folder`, order the slices and show the viewer."""
         async with self:
-            self.is_loading = True
-            self.error_message = ""
-            self.has_loaded = False
-            self.workflow_step = "select"
-            self.dicom_files = []
-            self.file_names = []
-            self.current_image_base64 = "/placeholder.svg"
-            self.metadata_unlocked = False
-            self.metadata_password_input = ""
-            self.metadata_password_error = ""
+            if self.opening:
+                return
+            self.opening = True
+            self.opening_done = 0
+            self.opening_total = 0
+            self.open_error = ""
         try:
-            if not self.directory_path:
+            if not folders.is_inside(folder, folders.dicom_root()):
                 async with self:
-                    self.error_message = "Please enter a valid directory path."
-                    self.is_loading = False
+                    self.open_error = "This folder is outside the DICOM folder."
                 return
-            path = Path(self.directory_path)
-            if not path.exists() or not path.is_dir():
+            try:
+                files = await asyncio.to_thread(folders.dicom_files, folder)
                 async with self:
-                    self.error_message = f"Directory not found: {self.directory_path}"
-                    self.is_loading = False
+                    self.opening_total = len(files)
+                keyed = []
+                for start in range(0, len(files), _OPEN_BATCH):
+                    batch = files[start : start + _OPEN_BATCH]
+                    keyed += await asyncio.to_thread(series.read_sort_keys, batch)
+                    async with self:
+                        self.opening_done = start + len(batch)
+            except OSError as e:
+                logging.exception(f"Error opening {folder}: {e}")
+                async with self:
+                    self.open_error = folders.describe_error(e)
                 return
-            files = sorted([f for f in path.iterdir() if f.is_file()])
-            sortable_dicoms: list[tuple[tuple, Path, str]] = []
-            for file_path in files:
-                try:
-                    ds = pydicom.dcmread(file_path, stop_before_pixels=True)
-                    sort_key = self._dicom_sort_key(ds, file_path)
-                    sortable_dicoms.append(
-                        (sort_key, file_path.absolute(), file_path.name)
-                    )
-                except Exception as e:
-                    logging.exception(f"Skipping invalid DICOM file {file_path}: {e}")
-                    continue
-            if not sortable_dicoms:
+            if not keyed:
                 async with self:
-                    self.error_message = "No valid DICOM files found in this directory."
-            else:
-                sortable_dicoms.sort(key=lambda item: item[0])
-                valid_dicoms = [item[1] for item in sortable_dicoms]
-                valid_names = [item[2] for item in sortable_dicoms]
-                async with self:
-                    self.dicom_files = valid_dicoms
-                    self.file_names = valid_names
-                    self.has_loaded = True
-                    self.current_index = 0
-                    self.workflow_step = "list"
-                return DicomViewerState.load_selected_image
-        except PermissionError as e:
-            logging.exception(f"Error scanning directory: {e}")
+                    self.open_error = "No readable DICOM images in this folder."
+                return
+            keyed.sort(key=lambda item: item[0])
+            ordered = [path for _, path in keyed]
+            window = await asyncio.to_thread(series.file_window, ordered[0])
+            label = await asyncio.to_thread(folders.series_label, ordered[0])
             async with self:
-                self.error_message = (
-                    "Permission denied when accessing the directory. "
-                    "On macOS, grant Terminal/VS Code access to Desktop or "
-                    "enable Full Disk Access in System Settings > Privacy & Security."
-                )
-        except Exception as e:
-            logging.exception(f"Error scanning directory: {e}")
-            async with self:
-                self.error_message = f"Error accessing directory: {str(e)}"
+                self._series_version += 1
+                self._series_files = ordered
+                self._series_window = window or DEFAULT_WINDOW
+                self._series_window_preset = FILE_WINDOW if window else ""
+                self.series_path = folder
+                self.series_name = os.path.basename(os.path.normpath(folder))
+                self.series_label = label
+                self.total_images = len(ordered)
+                self.current_index = 0
+                self.slice_slider_key += 1
+                self.error_message = ""
+                self.current_image_base64 = "/placeholder.svg"
+                self._cached_index = -1
+                self._cached_pixel_array = None
+                self.zoom_level = 1.0
+                self.pan_x = 0
+                self.pan_y = 0
+                self.metadata_unlocked = False
+                self.metadata_password_input = ""
+                self.metadata_password_error = ""
+                self._set_window(*self._series_window, self._series_window_preset)
+            # Show the first slice before switching pages.
+            await self._refresh()
+            yield rx.redirect("/viewer")
         finally:
             async with self:
-                self.is_loading = False
-
-    @rx.event
-    def reset_scan(self):
-        """Return to directory selection step while keeping chosen path."""
-        self.error_message = ""
-        self.has_loaded = False
-        self.workflow_step = "select"
-        self.dicom_files = []
-        self.file_names = []
-        self.current_index = 0
-        self.current_image_base64 = "/placeholder.svg"
-        self.metadata_unlocked = False
-        self.metadata_password_input = ""
-        self.metadata_password_error = ""
-        return DicomViewerState.open_directory_dialog
-
-    @rx.event
-    def open_viewer(self):
-        """Navigate to viewer and mark workflow step."""
-        self.workflow_step = "viewer"
-        return rx.redirect("/viewer")
-
-    @rx.event
-    def back_to_results(self):
-        """Navigate back to scan results."""
-        self.workflow_step = "list" if self.has_loaded else "select"
-        return rx.redirect("/")
-
-    @rx.event
-    def handle_file_selection(self, index: int):
-        """Select a specific file from the list."""
-        if 0 <= index < len(self.dicom_files):
-            self.current_index = index
-            return DicomViewerState.load_selected_image
+                self.opening = False
 
     @rx.event(background=True)
-    async def load_selected_image(self):
-        """Load and process the currently selected DICOM image."""
-        if not self.dicom_files or self.current_index >= len(self.dicom_files):
-            return
-        file_path = self.dicom_files[self.current_index]
+    async def refresh_image(self):
+        await self._refresh()
+
+    async def _refresh(self):
+        """Bring the picture up to date with the slice and window in the state.
+
+        Call from a background event. A call made while a refresh is running
+        returns at once: the running loop sees its change and stops only when
+        the picture matches the latest values, so drags and wheel bursts
+        coalesce instead of piling up.
+        """
+        async with self:
+            if self._refreshing:
+                return
+            self._refreshing = True
+        done = False
         try:
-            ds = pydicom.dcmread(file_path)
-            async with self:
-                self._cached_pixel_array = ds.pixel_array
-                self._cached_rescale_slope = getattr(ds, "RescaleSlope", 1.0)
-                self._cached_rescale_intercept = getattr(ds, "RescaleIntercept", 0.0)
-                self._extract_metadata(ds)
-                self._process_image()
-        except Exception as e:
-            logging.exception(f"Error loading image {file_path}: {e}")
-            async with self:
-                self.error_message = self._format_dicom_error(e)
+            while True:
+                async with self:
+                    version = self._series_version
+                    index = self.current_index
+                    center, width = self.window_center, self.window_width
+                    if not 0 <= index < len(self._series_files):
+                        self._refreshing = False
+                        done = True
+                        return
+                    path = self._series_files[index]
+                    cached = self._cached_index == index
+                    pixels = self._cached_pixel_array
+                    slope = self._cached_rescale_slope
+                    intercept = self._cached_rescale_intercept
+                ds = None
+                if not cached:
+                    try:
+                        ds, pixels, slope, intercept = await asyncio.to_thread(
+                            series.read_slice, path
+                        )
+                    except Exception as e:
+                        logging.exception(f"Error loading image {path}: {e}")
+                        async with self:
+                            if self._series_version == version:
+                                self.error_message = self._format_dicom_error(e)
+                                self.current_image_base64 = "/placeholder.svg"
+                                self._cached_index = -1
+                                self._cached_pixel_array = None
+                                if self.current_index == index:
+                                    self._refreshing = False
+                                    done = True
+                                    return
+                        continue
+                image = await asyncio.to_thread(
+                    series.render_png, pixels, slope, intercept, center, width
+                )
+                async with self:
+                    if self._series_version != version:
+                        continue
+                    if ds is not None:
+                        self._cached_index = index
+                        self._cached_pixel_array = pixels
+                        self._cached_rescale_slope = slope
+                        self._cached_rescale_intercept = intercept
+                        self._extract_metadata(ds)
+                        self.error_message = ""
+                    self.current_image_base64 = image
+                    if (self.current_index, self.window_center, self.window_width) == (
+                        index,
+                        center,
+                        width,
+                    ):
+                        self._refreshing = False
+                        done = True
+                        return
+        finally:
+            if not done:
+                async with self:
+                    self._refreshing = False
 
     def _extract_metadata(self, ds):
         """Extract metadata from DICOM dataset."""
@@ -648,53 +572,6 @@ class DicomViewerState(rx.State):
         self.metadata_password_input = ""
         self.metadata_password_error = ""
 
-    def _process_image(self):
-        """Apply windowing and convert to base64."""
-        if self._cached_pixel_array is None:
-            return
-        try:
-            pixel_data = self._cached_pixel_array
-            is_rgb = pixel_data.ndim == 3 and pixel_data.shape[-1] in (3, 4)
-            if pixel_data.ndim >= 3 and not is_rgb:
-                try:
-                    pixel_data = pixel_data.reshape((-1,) + pixel_data.shape[-2:])[0]
-                except Exception:
-                    pixel_data = pixel_data[0]
-            if is_rgb:
-                rgb = pixel_data.astype(float)
-                rgb = np.clip(rgb, np.min(rgb), np.max(rgb))
-                if np.max(rgb) != np.min(rgb):
-                    rgb = (rgb - np.min(rgb)) / (np.max(rgb) - np.min(rgb)) * 255.0
-                img_uint8 = rgb.astype(np.uint8)
-                pil_image = Image.fromarray(img_uint8)
-                if pil_image.mode not in ("RGB", "RGBA"):
-                    pil_image = pil_image.convert("RGB")
-            else:
-                pixel_data = pixel_data.astype(float)
-                hu_image = (
-                    pixel_data * self._cached_rescale_slope + self._cached_rescale_intercept
-                )
-                center = self.window_center
-                width = self.window_width
-                min_val = center - width / 2
-                max_val = center + width / 2
-                windowed = np.clip(hu_image, min_val, max_val)
-                if max_val != min_val:
-                    windowed = (windowed - min_val) / (max_val - min_val) * 255.0
-                else:
-                    windowed = windowed * 0
-                img_uint8 = windowed.astype(np.uint8)
-                pil_image = Image.fromarray(img_uint8)
-                if pil_image.mode != "L":
-                    pil_image = pil_image.convert("L")
-            buffer = io.BytesIO()
-            pil_image.save(buffer, format="PNG")
-            b64_string = base64.b64encode(buffer.getvalue()).decode()
-            self.current_image_base64 = f"data:image/png;base64,{b64_string}"
-        except Exception as e:
-            logging.exception(f"Error processing image: {e}")
-            self.current_image_base64 = "/placeholder.svg"
-
     def _format_dicom_error(self, error: Exception) -> str:
         message = str(error)
         lowered = message.lower()
@@ -711,45 +588,79 @@ class DicomViewerState(rx.State):
             )
         return f"Error loading image: {message}"
 
+    def _set_window(
+        self, center: float, width: float, preset: str, from_slider: bool = False
+    ):
+        """Change the window; refresh_image redraws."""
+        self.window_center = float(center)
+        self.window_width = float(width)
+        self.selected_preset = preset
+        if not from_slider:
+            self.window_slider_key += 1
+        return DicomViewerState.refresh_image
+
     @rx.event
     def update_window_width(self, value: str):
         try:
-            self.window_width = float(value)
-            self.selected_preset = ""
-            self._process_image()
+            width = float(value)
         except ValueError as e:
             logging.exception(f"Error updating window width: {e}")
+            return
+        return self._set_window(self.window_center, width, "", from_slider=True)
 
     @rx.event
     def update_window_center(self, value: str):
         try:
-            self.window_center = float(value)
-            self.selected_preset = ""
-            self._process_image()
+            center = float(value)
         except ValueError as e:
             logging.exception(f"Error updating window center: {e}")
+            return
+        return self._set_window(center, self.window_width, "", from_slider=True)
+
+    def _go_to_slice(self, index: int, from_slider: bool = False):
+        """Move to slice `index` (clamped); refresh_image redraws."""
+        if not self.total_images:
+            return None
+        index = max(0, min(self.total_images - 1, index))
+        if index == self.current_index:
+            return None
+        self.current_index = index
+        if not from_slider:
+            self.slice_slider_key += 1
+        return DicomViewerState.refresh_image
 
     @rx.event
     def next_image(self):
-        if self.current_index < self.total_images - 1:
-            self.current_index += 1
-            return DicomViewerState.load_selected_image
+        return self._go_to_slice(self.current_index + 1)
 
     @rx.event
     def prev_image(self):
-        if self.current_index > 0:
-            self.current_index -= 1
-            return DicomViewerState.load_selected_image
+        return self._go_to_slice(self.current_index - 1)
 
     @rx.event
     def set_slice_index(self, value: str):
         try:
-            val = int(float(value))
-            if 0 <= val < self.total_images:
-                self.current_index = val
-                return DicomViewerState.load_selected_image
+            index = int(float(value))
         except ValueError as e:
             logging.exception(f"Error setting slice index: {e}")
+            return
+        return self._go_to_slice(index, from_slider=True)
+
+    @rx.event
+    def scroll_slices(self, delta_y: float):
+        """Mouse wheel over the image: down is the next slice, up the previous."""
+        if delta_y:
+            return self._go_to_slice(self.current_index + (1 if delta_y > 0 else -1))
+
+    @rx.event
+    def handle_slice_key(self, key: str):
+        """Arrow and Page keys step through the slices; Home/End jump to the ends."""
+        if key == "Home":
+            return self._go_to_slice(0)
+        if key == "End":
+            return self._go_to_slice(self.total_images - 1)
+        if key in _SLICE_KEY_STEPS:
+            return self._go_to_slice(self.current_index + _SLICE_KEY_STEPS[key])
 
     @rx.event
     def set_zoom(self, value: float):
@@ -817,19 +728,13 @@ class DicomViewerState(rx.State):
         }
         if preset_name in presets:
             center, width = presets[preset_name]
-            self.window_center = float(center)
-            self.window_width = float(width)
-            self.selected_preset = preset_name
-            self._process_image()
+            return self._set_window(center, width, preset_name)
 
     @rx.event
     def reset_view(self):
-        """Reset all view settings to default."""
+        """Reset zoom, pan and the window to how the series opened."""
         self.reset_zoom()
-        self.window_center = 40.0
-        self.window_width = 400.0
-        self.selected_preset = ""
-        self._process_image()
+        return self._set_window(*self._series_window, self._series_window_preset)
 
     @rx.event
     def set_tooltip_language(self, value: str):

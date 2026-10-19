@@ -1,5 +1,36 @@
 import reflex as rx
+from reflex_components_core.core.window_events import WindowEventListener
+
 from dicom_viewer.states.dicom_state import DicomViewerState
+
+
+def _wheel_spec(e: rx.Var) -> tuple[rx.Var[float]]:
+    # Ctrl + wheel is the browser's (pinch) zoom, not slice scrolling.
+    return (rx.Var(f"({e}.ctrlKey ? 0 : {e}.deltaY)").to(float),)
+
+
+def _slice_key_spec(e: rx.Var) -> tuple[rx.Var[str]]:
+    # Keys typed into the password box or used on a slider, and shortcuts with
+    # modifiers, are not slice navigation.
+    return (
+        rx.Var(
+            f"(({e}.metaKey || {e}.ctrlKey || {e}.altKey || "
+            f"['INPUT', 'TEXTAREA', 'SELECT'].includes({e}.target?.tagName)) "
+            f"? '' : {e}.key)"
+        ).to(str),
+    )
+
+
+class WheelArea(rx.el.Div):
+    """A div that reports mouse-wheel movement."""
+
+    on_wheel: rx.EventHandler[_wheel_spec]
+
+
+class SliceKeys(WindowEventListener):
+    """Page-wide key listener that leaves form fields alone."""
+
+    on_key_down: rx.EventHandler[_slice_key_spec]
 
 
 def control_section_header(title: str) -> rx.Component:
@@ -64,25 +95,28 @@ def preset_item(preset: str) -> rx.Component:
                 "flex-1 text-left text-sm text-slate-200 bg-slate-800/60 border border-slate-700 rounded-lg px-3 py-2 hover:bg-slate-800 transition-colors",
             ),
         ),
-        rx.el.div(
-            rx.icon("help-circle", class_name="h-4 w-4 text-slate-400"),
-            class_name="ml-2",
-        ),
-        rx.el.div(
-            DicomViewerState.preset_tooltips[preset],
-            rx.el.button(
-                "Learn",
-                on_click=lambda: DicomViewerState.open_tutorial_dialog(preset),
-                class_name="mt-2 text-[11px] text-blue-300 hover:text-blue-200",
+        rx.el.button(
+            rx.icon("circle-help", class_name="h-4 w-4"),
+            # Shown only while pointing at "?", and it ignores the pointer, so
+            # it never covers the buttons of the presets around it.
+            rx.el.span(
+                DicomViewerState.preset_tooltips[preset],
+                rx.el.span(
+                    "Click ? for the tutorial",
+                    class_name="block mt-1 text-[11px] text-blue-300",
+                ),
+                class_name=(
+                    "absolute right-full top-1/2 -translate-y-1/2 mr-2 w-52 block "
+                    "text-left text-xs text-slate-200 bg-slate-900 border "
+                    "border-slate-700 rounded-lg shadow-xl p-2 z-50 opacity-0 "
+                    "pointer-events-none transition-opacity group-hover:opacity-100 "
+                    "group-focus-visible:opacity-100"
+                ),
             ),
-            class_name=(
-                "absolute right-0 mt-2 w-52 text-xs text-slate-200 bg-slate-900 "
-                "border border-slate-700 rounded-lg shadow-xl p-2 z-50 "
-                "opacity-0 pointer-events-none transition-opacity "
-                "group-hover:opacity-100 group-hover:pointer-events-auto"
-            ),
+            on_click=lambda: DicomViewerState.open_tutorial_dialog(preset),
+            class_name="relative group ml-2 p-1 rounded text-slate-400 hover:text-blue-300 hover:bg-slate-800 transition-colors",
         ),
-        class_name="relative flex items-center group",
+        class_name="flex items-center",
     )
 
 
@@ -212,38 +246,6 @@ def viewer_sidebar() -> rx.Component:
     """The controls sidebar."""
     return rx.el.div(
         rx.el.div(
-            control_section_header("Navigation"),
-            rx.el.div(
-                rx.el.button(
-                    rx.icon("chevron-left", class_name="h-6 w-6"),
-                    on_click=DicomViewerState.prev_image,
-                    disabled=DicomViewerState.current_index == 0,
-                    class_name="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed text-slate-300 transition-colors",
-                ),
-                rx.el.div(
-                    rx.el.input(
-                        type="range",
-                        min="0",
-                        max=DicomViewerState.slider_max,
-                        key=DicomViewerState.current_index,
-                        default_value=DicomViewerState.current_index,
-                        on_change=DicomViewerState.set_slice_index.throttle(50),
-                        class_name="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500",
-                    ),
-                    class_name="flex-1 px-3",
-                ),
-                rx.el.button(
-                    rx.icon("chevron-right", class_name="h-6 w-6"),
-                    on_click=DicomViewerState.next_image,
-                    disabled=DicomViewerState.current_index
-                    == DicomViewerState.total_images - 1,
-                    class_name="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed text-slate-300 transition-colors",
-                ),
-                class_name="flex items-center justify-between mb-2",
-            ),
-            class_name="p-6 border-b border-slate-800",
-        ),
-        rx.el.div(
             control_section_header("Zoom & Pan"),
             rx.el.div(
                 rx.el.div(
@@ -339,9 +341,9 @@ def viewer_sidebar() -> rx.Component:
                     type="range",
                     min="-1000",
                     max="3000",
-                    key=DicomViewerState.window_center,
+                    key=DicomViewerState.window_slider_key,
                     default_value=DicomViewerState.window_center,
-                    on_change=DicomViewerState.update_window_center.throttle(100),
+                    on_change=DicomViewerState.update_window_center,
                     class_name="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer hover:bg-slate-600 transition-colors accent-blue-500",
                 ),
                 class_name="mb-4",
@@ -361,9 +363,9 @@ def viewer_sidebar() -> rx.Component:
                     type="range",
                     min="1",
                     max="4000",
-                    key=DicomViewerState.window_width,
+                    key=DicomViewerState.window_slider_key,
                     default_value=DicomViewerState.window_width,
-                    on_change=DicomViewerState.update_window_width.throttle(100),
+                    on_change=DicomViewerState.update_window_width,
                     class_name="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer hover:bg-slate-600 transition-colors accent-blue-500",
                 ),
             ),
@@ -400,40 +402,127 @@ def viewer_sidebar() -> rx.Component:
     )
 
 
+def top_bar() -> rx.Component:
+    return rx.el.div(
+        rx.el.div(
+            rx.el.button(
+                rx.icon("arrow-left", class_name="h-4 w-4 mr-2"),
+                "Back to folders",
+                on_click=rx.redirect("/"),
+                class_name="flex items-center px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors text-sm font-medium shrink-0",
+            ),
+            rx.cond(
+                DicomViewerState.total_images > 0,
+                rx.el.div(
+                    rx.el.p(
+                        rx.cond(
+                            DicomViewerState.series_label != "",
+                            DicomViewerState.series_label,
+                            DicomViewerState.series_name,
+                        ),
+                        class_name="text-sm font-medium text-slate-100 truncate",
+                    ),
+                    rx.el.p(
+                        DicomViewerState.series_name,
+                        title=DicomViewerState.series_path,
+                        class_name="font-mono text-xs text-slate-400 truncate",
+                    ),
+                    class_name="min-w-0 border-l border-slate-700 pl-4",
+                ),
+            ),
+            class_name="flex items-center gap-4 min-w-0",
+        ),
+        rx.cond(
+            DicomViewerState.total_images > 0,
+            rx.el.div(
+                rx.el.button(
+                    rx.icon("info", class_name="h-4 w-4 mr-2"),
+                    rx.cond(
+                        DicomViewerState.show_metadata, "Hide Info", "Show Info"
+                    ),
+                    on_click=DicomViewerState.toggle_metadata,
+                    class_name="flex items-center text-slate-400 hover:text-blue-400 transition-colors text-sm font-medium",
+                ),
+                rx.el.div(
+                    rx.icon("layers", class_name="h-4 w-4 mr-2 text-blue-400"),
+                    rx.el.span(
+                        DicomViewerState.current_position_text,
+                        class_name="font-mono text-sm text-slate-300",
+                    ),
+                    title="Slice / slices in this series",
+                    class_name="flex items-center bg-slate-800 px-3 py-1.5 rounded-full border border-slate-700",
+                ),
+                class_name="flex items-center gap-6 shrink-0",
+            ),
+        ),
+        class_name="bg-slate-900 border-b border-slate-800 px-4 py-3 flex justify-between items-center gap-4 z-10 shrink-0",
+    )
+
+
+def slice_bar() -> rx.Component:
+    """Slice navigation right under the image."""
+    step_button = "p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-slate-300 transition-colors shrink-0"
+    return rx.el.div(
+        rx.el.button(
+            rx.icon("chevron-left", class_name="h-5 w-5"),
+            on_click=DicomViewerState.prev_image,
+            disabled=DicomViewerState.current_index == 0,
+            title="Previous slice (↑)",
+            class_name=step_button,
+        ),
+        rx.el.input(
+            type="range",
+            min="0",
+            max=DicomViewerState.slider_max,
+            key=DicomViewerState.slice_slider_key,
+            default_value=DicomViewerState.current_index,
+            on_change=DicomViewerState.set_slice_index,
+            class_name="flex-1 min-w-0 h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500",
+        ),
+        rx.el.button(
+            rx.icon("chevron-right", class_name="h-5 w-5"),
+            on_click=DicomViewerState.next_image,
+            disabled=DicomViewerState.current_index
+            == DicomViewerState.total_images - 1,
+            title="Next slice (↓)",
+            class_name=step_button,
+        ),
+        rx.el.span(
+            DicomViewerState.current_position_text,
+            class_name="font-mono text-sm text-slate-300 w-20 text-right shrink-0",
+        ),
+        rx.el.span(
+            rx.icon("mouse", class_name="h-3.5 w-3.5 mr-1.5"),
+            "Scroll or ↑ ↓ to change slice",
+            class_name="hidden lg:flex items-center text-xs text-slate-500 whitespace-nowrap",
+        ),
+        class_name="flex items-center gap-3 px-4 py-3 bg-slate-900 border-t border-slate-800 shrink-0",
+    )
+
+
+def empty_viewer() -> rx.Component:
+    return rx.el.div(
+        rx.icon("images", class_name="h-12 w-12 text-slate-600 mb-4"),
+        rx.el.p("No images are open", class_name="text-lg text-slate-200 font-medium"),
+        rx.el.p(
+            "Choose a folder with DICOM images first.",
+            class_name="text-sm text-slate-500 mt-1",
+        ),
+        rx.el.button(
+            rx.icon("folder-open", class_name="h-4 w-4 mr-2"),
+            "Choose a folder",
+            on_click=rx.redirect("/"),
+            class_name="mt-6 flex items-center px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium",
+        ),
+        class_name="flex-1 flex flex-col items-center justify-center text-center",
+    )
+
+
 def viewer_layout() -> rx.Component:
     """The main viewer layout with image and controls."""
     return rx.el.div(
-        rx.el.div(
-            rx.el.div(
-                rx.el.button(
-                    rx.icon("arrow-left", class_name="h-4 w-4 mr-2"),
-                    "Back to Results",
-                    on_click=DicomViewerState.back_to_results,
-                    class_name="flex items-center text-slate-400 hover:text-white transition-colors text-sm font-medium",
-                ),
-                rx.el.div(
-                    rx.el.button(
-                        rx.icon("info", class_name="h-4 w-4 mr-2"),
-                        rx.cond(
-                            DicomViewerState.show_metadata, "Hide Info", "Show Info"
-                        ),
-                        on_click=DicomViewerState.toggle_metadata,
-                        class_name="flex items-center text-slate-400 hover:text-blue-400 transition-colors text-sm font-medium ml-6",
-                    ),
-                    class_name="border-l border-slate-700 ml-6 pl-6",
-                ),
-                class_name="flex items-center",
-            ),
-            rx.el.div(
-                rx.icon("scan-eye", class_name="h-4 w-4 mr-2 text-blue-400"),
-                rx.el.span(
-                    DicomViewerState.current_position_text,
-                    class_name="font-mono text-sm text-slate-300",
-                ),
-                class_name="flex items-center bg-slate-800 px-3 py-1.5 rounded-full border border-slate-700",
-            ),
-            class_name="bg-slate-900 border-b border-slate-800 p-4 flex justify-between items-center z-10 sticky top-0 shrink-0",
-        ),
+        SliceKeys.create(on_key_down=DicomViewerState.handle_slice_key),
+        top_bar(),
         rx.cond(
             DicomViewerState.error_message != "",
             rx.el.div(
@@ -442,22 +531,31 @@ def viewer_layout() -> rx.Component:
                 class_name="m-4 flex items-center text-red-400 text-sm bg-red-900/20 p-3 rounded-lg border border-red-900/50",
             ),
         ),
-        rx.el.div(
-            metadata_panel(),
+        rx.cond(
+            DicomViewerState.total_images > 0,
             rx.el.div(
-                rx.image(
-                    src=DicomViewerState.current_image_base64,
-                    style={
-                        "transform": f"translate({DicomViewerState.pan_x}px, {DicomViewerState.pan_y}px) scale({DicomViewerState.zoom_level})",
-                        "transition": "transform 0.1s ease-out",
-                    },
-                    class_name="max-h-full max-w-full object-contain pointer-events-none select-none",
-                    alt="DICOM Image",
+                metadata_panel(),
+                rx.el.div(
+                    WheelArea.create(
+                        rx.image(
+                            src=DicomViewerState.current_image_base64,
+                            style={
+                                "transform": f"translate({DicomViewerState.pan_x}px, {DicomViewerState.pan_y}px) scale({DicomViewerState.zoom_level})",
+                                "transition": "transform 0.1s ease-out",
+                            },
+                            class_name="max-h-full max-w-full object-contain pointer-events-none select-none",
+                            alt="DICOM Image",
+                        ),
+                        on_wheel=DicomViewerState.scroll_slices.throttle(60),
+                        class_name="flex-1 min-h-0 bg-black relative flex items-center justify-center overflow-hidden w-full",
+                    ),
+                    slice_bar(),
+                    class_name="flex flex-col flex-1 min-w-0",
                 ),
-                class_name="flex-1 bg-black relative flex items-center justify-center overflow-hidden w-full",
+                viewer_sidebar(),
+                class_name="flex flex-1 overflow-hidden min-h-0",
             ),
-            viewer_sidebar(),
-            class_name="flex flex-1 overflow-hidden min-h-0",
+            empty_viewer(),
         ),
         class_name="flex flex-col h-screen w-screen bg-slate-950 text-slate-100 font-['Inter'] overflow-hidden",
     )
