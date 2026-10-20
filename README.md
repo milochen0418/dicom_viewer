@@ -9,8 +9,9 @@ presets, the image metadata, and any annotations stored beside the images:
 segmentations, structure sets, measurement reports and presentation states.
 
 It is meant to be friendly to people new to DICOM. Every windowing preset
-has a tooltip and a short tutorial, the folder page tells you which folders
-hold images, and the layout works on a phone as well as on a desktop.
+says what it is for and has a short tutorial, the folder page tells you
+which folders hold images, and the layout works on a phone as well as on a
+desktop.
 
 ## Features
 
@@ -18,8 +19,9 @@ hold images, and the layout works on a phone as well as on a desktop.
   of images and annotations in each folder, the series label, one-click
   Open. The last folder you visited is remembered.
 - **One view**: slice slider, mouse wheel and arrow keys, zoom and pan,
-  window level and width sliders, presets with tooltips and tutorials in
-  English, 繁體中文, 简体中文 and Español.
+  window level and width sliders, an Auto window and 31 presets grouped by
+  body region, each with a description and a tutorial in English, 繁體中文,
+  简体中文 and Español.
 - **Three views (MPR)**: axial, coronal and sagittal cuts around one
   crosshair. Click a view to move the crosshair, scroll a view to step
   through it.
@@ -69,14 +71,20 @@ Moving through the series:
 | Any slice | the slider under the image |
 | Zoom and pan | the buttons under Zoom & Pan; Reset All restores the view and the window |
 
-### 4) Windowing presets and tutorials
+### 4) Windowing: Auto and presets
 
-![Preset tooltip](docs/images/preset-tooltip.png)
+![Windowing with the Bone preset](docs/images/windowing.png)
 
-The Level and Width sliders set the window by hand; the presets set it for
-common tissues (soft tissue, lung, bone, brain, ...). Point at the **?**
-next to a preset to read what it is for, in the language chosen under
-Tooltip Language, and click it for a short tutorial.
+A series opens on **Auto**: the window its files suggest or, when they
+suggest none, one worked out from the image's own values. The **Presets**
+list sets the window for a common tissue (soft tissue, lung, bone, brain,
+...), grouped by body region; on a phone it opens the phone's own picker.
+The line under it says what the window in use is for, in the language
+chosen beside the Windowing heading, and **?** opens a short tutorial in
+that language. The Level and Width sliders set the window by hand.
+
+**Auto** goes back to the window the series opened with, after a preset or
+the sliders. Reset All does the same and also resets zoom and pan.
 
 ![Preset tutorial](docs/images/preset-tutorial.png)
 
@@ -135,8 +143,9 @@ with tabs to switch.
 ## Data
 
 - DICOM Part 10 files (with the `DICM` preamble). Grayscale and RGB images
-  are shown; the window suggested by the file is used when it has one.
-  Compressed transfer syntaxes need `pylibjpeg` (with `pylibjpeg-libjpeg`)
+  are shown. The Auto window is the one the file suggests, or, without one,
+  the 1st to 99th percentile of a middle slice, the lowest value (usually
+  the background) left out. Compressed transfer syntaxes need `pylibjpeg` (with `pylibjpeg-libjpeg`)
   or `gdcm` installed in the environment.
 - Keep one series per folder. Annotation objects are found in the series
   folder and in the folders beside it.

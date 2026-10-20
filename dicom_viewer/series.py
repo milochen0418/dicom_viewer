@@ -131,6 +131,42 @@ def read_slice(path: str):
     return ds, pixels, slope, intercept
 
 
+def auto_window(
+    pixels: np.ndarray, slope: float, intercept: float
+) -> tuple[float, float] | None:
+    """A window (center, width) worked out from the image's own values.
+
+    It spans the 1st to the 99th percentile, leaving out the lowest value
+    when it can, as that is usually the background or the padding around the
+    scan. None for colour images, which are shown without windowing, and for
+    flat ones.
+    """
+    if pixels.ndim == 3 and pixels.shape[-1] in (3, 4):
+        return None
+    # A million samples are plenty, and keep big images quick.
+    values = pixels.ravel()[:: max(1, pixels.size // 1_000_000)]
+    values = values.astype(float) * slope + intercept
+    if not values.size:
+        return None
+    for sample in (values[values > values.min()], values):
+        if sample.size:
+            low, high = np.percentile(sample, (1, 99))
+            if high > low:
+                return float(low + high) / 2, float(high - low)
+    low, high = float(values.min()), float(values.max())
+    return ((low + high) / 2, high - low) if high > low else None
+
+
+def image_window(path: str) -> tuple[float, float] | None:
+    """auto_window of one file, or None when its pixels cannot be read."""
+    try:
+        _, pixels, slope, intercept = read_slice(path)
+    except Exception as error:
+        logging.warning("No window from the pixels of %s: %s", path, error)
+        return None
+    return auto_window(pixels, slope, intercept)
+
+
 def render_image(
     pixels: np.ndarray, slope: float, intercept: float, center: float, width: float
 ) -> Image.Image:

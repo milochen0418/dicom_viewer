@@ -9,9 +9,60 @@ import numpy as np
 from dicom_viewer import annotations, folders, series, volume
 import dicom_viewer.annotations.builtin  # noqa: F401 - registers the SEG, SR, RTSTRUCT and PR adapters
 
-# Used when the files suggest no window of their own.
+# Used when neither the files nor the pixels give a window.
 DEFAULT_WINDOW = (40.0, 400.0)
-FILE_WINDOW = "From file"
+# selected_preset while the window is the one the series opened with.
+AUTO = "Auto"
+
+# Windowing presets: (center, width) in HU.
+PRESETS = {
+    "Soft Tissue": (40, 400),
+    "Lung": (-600, 1500),
+    "Bone": (300, 1500),
+    "Brain": (40, 80),
+    "Abdomen": (50, 400),
+    "Liver": (60, 150),
+    "Mediastinum": (40, 350),
+    "Spine": (30, 300),
+    "Pelvis": (50, 450),
+    "Head/Neck": (50, 250),
+    "CTA/Vascular": (150, 600),
+    "Kidney": (30, 300),
+    "Pancreas": (50, 200),
+    "Trauma": (50, 500),
+    "Subdural": (50, 130),
+    "Stroke": (35, 30),
+    "Body": (40, 450),
+    "Extremity/MSK": (40, 350),
+    "Temporal Bone": (700, 4000),
+    "Sinus": (50, 300),
+    "Angio Bone Sub": (300, 1200),
+    "Lung HRCT": (-700, 1200),
+    "Orbits": (50, 300),
+    "CTA Head/Neck": (180, 700),
+    "Arterial": (150, 600),
+    "Venous": (100, 500),
+    "Colon/Bowel": (50, 400),
+    "Adrenal": (40, 300),
+    "Gallbladder": (30, 200),
+    "Skin/Subcutaneous": (50, 250),
+    "Cardiac": (75, 350),
+}
+
+# How the preset picker groups them, most used first.
+PRESET_GROUPS = {
+    "General": ["Soft Tissue", "Body", "Trauma", "Skin/Subcutaneous"],
+    "Head & Neck": [
+        "Brain", "Stroke", "Subdural", "Head/Neck", "Temporal Bone", "Sinus", "Orbits",
+    ],
+    "Chest": ["Lung", "Lung HRCT", "Mediastinum", "Cardiac"],
+    "Abdomen & Pelvis": [
+        "Abdomen", "Liver", "Kidney", "Pancreas", "Adrenal", "Gallbladder", "Colon/Bowel",
+        "Pelvis",
+    ],
+    "Bone & MSK": ["Bone", "Spine", "Extremity/MSK"],
+    "Vessels (CTA)": ["CTA/Vascular", "CTA Head/Neck", "Arterial", "Venous", "Angio Bone Sub"],
+}
 
 # Files whose headers are read between two progress updates while opening.
 _OPEN_BATCH = 16
@@ -214,8 +265,9 @@ class DicomViewerState(rx.State):
     series_label: str = ""
     total_images: int = 0
     _series_files: list[str] = []
+    # The Auto window, and where it came from: "file", "image" or "default".
     _series_window: tuple[float, float] = DEFAULT_WINDOW
-    _series_window_preset: str = ""
+    auto_source: str = "file"
     # Bumped when a different series is opened, so in-flight image work for
     # the previous one is dropped.
     _series_version: int = 0
@@ -235,7 +287,8 @@ class DicomViewerState(rx.State):
     zoom_level: float = 1.0
     pan_x: int = 0
     pan_y: int = 0
-    selected_preset: str = ""
+    # AUTO, a preset name, or "" when the window was set with the sliders.
+    selected_preset: str = AUTO
     tooltip_language: str = "zh-TW"
     tutorial_dialog_open: bool = False
     tutorial_dialog_title: str = ""
@@ -581,6 +634,34 @@ class DicomViewerState(rx.State):
         },
     }
 
+    # What Auto (by auto_source) and a window set by hand mean.
+    _window_notes: dict[str, dict[str, str]] = {
+        "en": {
+            "file": "The window the series' files suggest.",
+            "image": "Worked out from the image's own values.",
+            "default": "A soft-tissue window; the series suggests none.",
+            "manual": "Set by hand with the sliders below.",
+        },
+        "zh-TW": {
+            "file": "使用這個序列檔案建議的視窗。",
+            "image": "依影像本身的數值自動算出。",
+            "default": "序列沒有建議視窗，先用軟組織視窗。",
+            "manual": "用下方滑桿手動調整。",
+        },
+        "zh-CN": {
+            "file": "使用这个序列文件建议的视窗。",
+            "image": "根据图像本身的数值自动算出。",
+            "default": "序列没有建议视窗，先用软组织视窗。",
+            "manual": "用下方滑块手动调整。",
+        },
+        "es": {
+            "file": "La ventana que sugieren los archivos de la serie.",
+            "image": "Calculada a partir de los valores de la imagen.",
+            "default": "Ventana de tejidos blandos; la serie no sugiere ninguna.",
+            "manual": "Ajustada a mano con los controles de abajo.",
+        },
+    }
+
     _metadata_password: str = os.getenv("DICOM_METADATA_PASSWORD", "dicom")
 
     @rx.var
@@ -641,6 +722,13 @@ class DicomViewerState(rx.State):
             ordered = [path for _, path, _ in keyed]
             refs = [ref for _, _, ref in keyed]
             window = await asyncio.to_thread(series.file_window, ordered[0])
+            source = "file"
+            if window is None:
+                # Nothing suggested: work one out from a slice in the middle.
+                window = await asyncio.to_thread(
+                    series.image_window, ordered[len(ordered) // 2]
+                )
+                source = "image"
             label = await asyncio.to_thread(folders.series_label, ordered[0])
             async with self:
                 self._series_version += 1
@@ -648,7 +736,7 @@ class DicomViewerState(rx.State):
                 self._series_files = ordered
                 self._series_refs = refs
                 self._series_window = window or DEFAULT_WINDOW
-                self._series_window_preset = FILE_WINDOW if window else ""
+                self.auto_source = source if window else "default"
                 self.series_path = folder
                 self.series_name = os.path.basename(os.path.normpath(folder))
                 self.series_label = label
@@ -673,7 +761,7 @@ class DicomViewerState(rx.State):
                 self.layer_errors = []
                 self.layers_status = ""
                 self._layers_key = ""
-                self._set_window(*self._series_window, self._series_window_preset)
+                self._set_window(*self._series_window, AUTO)
             # Show the first slice before switching pages.
             await self._refresh()
             yield rx.redirect("/viewer")
@@ -1366,48 +1454,20 @@ class DicomViewerState(rx.State):
     @rx.event
     def apply_preset(self, preset_name: str):
         """Apply a predefined windowing preset."""
-        presets = {
-            "Soft Tissue": (40, 400),
-            "Lung": (-600, 1500),
-            "Bone": (300, 1500),
-            "Brain": (40, 80),
-            "Abdomen": (50, 400),
-            "Liver": (60, 150),
-            "Mediastinum": (40, 350),
-            "Spine": (30, 300),
-            "Pelvis": (50, 450),
-            "Head/Neck": (50, 250),
-            "CTA/Vascular": (150, 600),
-            "Kidney": (30, 300),
-            "Pancreas": (50, 200),
-            "Trauma": (50, 500),
-            "Subdural": (50, 130),
-            "Stroke": (35, 30),
-            "Body": (40, 450),
-            "Extremity/MSK": (40, 350),
-            "Temporal Bone": (700, 4000),
-            "Sinus": (50, 300),
-            "Angio Bone Sub": (300, 1200),
-            "Lung HRCT": (-700, 1200),
-            "Orbits": (50, 300),
-            "CTA Head/Neck": (180, 700),
-            "Arterial": (150, 600),
-            "Venous": (100, 500),
-            "Colon/Bowel": (50, 400),
-            "Adrenal": (40, 300),
-            "Gallbladder": (30, 200),
-            "Skin/Subcutaneous": (50, 250),
-            "Cardiac": (75, 350),
-        }
-        if preset_name in presets:
-            center, width = presets[preset_name]
+        if preset_name in PRESETS:
+            center, width = PRESETS[preset_name]
             return self._set_window(center, width, preset_name)
+
+    @rx.event
+    def apply_auto_window(self):
+        """Back to the window the series opened with."""
+        return self._set_window(*self._series_window, AUTO)
 
     @rx.event
     def reset_view(self):
         """Reset zoom, pan and the window to how the series opened."""
         self.reset_zoom()
-        return self._set_window(*self._series_window, self._series_window_preset)
+        return self._set_window(*self._series_window, AUTO)
 
     @rx.event
     def set_tooltip_language(self, value: str):
@@ -1426,8 +1486,10 @@ class DicomViewerState(rx.State):
         )
 
     @rx.event
-    def open_tutorial_dialog(self, preset: str):
-        self.tutorial_dialog_title = preset
+    def open_tutorial_dialog(self):
+        """The tutorial of the preset in use; Auto and Manual open its start."""
+        preset = self.selected_preset if self.selected_preset in PRESETS else ""
+        self.tutorial_dialog_title = preset or "Windowing"
         self.tutorial_dialog_url = self._get_tutorial_link(preset)
         self.tutorial_dialog_open = True
 
@@ -1438,58 +1500,13 @@ class DicomViewerState(rx.State):
         self.tutorial_dialog_url = ""
 
     @rx.var
-    def preset_options(self) -> list[str]:
-        """Available windowing presets."""
-        return [
-            "Soft Tissue",
-            "Lung",
-            "Bone",
-            "Brain",
-            "Abdomen",
-            "Liver",
-            "Mediastinum",
-            "Spine",
-            "Pelvis",
-            "Head/Neck",
-            "CTA/Vascular",
-            "Kidney",
-            "Pancreas",
-            "Trauma",
-            "Subdural",
-            "Stroke",
-            "Body",
-            "Extremity/MSK",
-            "Temporal Bone",
-            "Sinus",
-            "Angio Bone Sub",
-            "Lung HRCT",
-            "Orbits",
-            "CTA Head/Neck",
-            "Arterial",
-            "Venous",
-            "Colon/Bowel",
-            "Adrenal",
-            "Gallbladder",
-            "Skin/Subcutaneous",
-            "Cardiac",
-        ]
-
-    @rx.var
-    def preset_tooltips(self) -> dict[str, str]:
-        return self._preset_descriptions.get(
-            self.tooltip_language, self._preset_descriptions["en"]
-        )
-
-    @rx.var
-    def preset_tutorial_links(self) -> dict[str, str]:
-        base = {
-            preset: self._default_tutorial_links.get(
-                self.tooltip_language, self._default_tutorial_links["en"]
+    def window_description(self) -> str:
+        """What the window in use is for, in the chosen language."""
+        language = self.tooltip_language
+        if self.selected_preset in PRESETS:
+            descriptions = self._preset_descriptions.get(
+                language, self._preset_descriptions["en"]
             )
-            for preset in self.preset_options
-        }
-        language_links = self._preset_tutorial_links.get(self.tooltip_language, {})
-        fallback_links = self._preset_tutorial_links.get("en", {})
-        base.update(fallback_links)
-        base.update(language_links)
-        return base
+            return descriptions.get(self.selected_preset, "")
+        notes = self._window_notes.get(language, self._window_notes["en"])
+        return notes[self.auto_source if self.selected_preset == AUTO else "manual"]

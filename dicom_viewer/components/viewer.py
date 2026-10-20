@@ -2,7 +2,7 @@ import reflex as rx
 from reflex_components_core.core.window_events import WindowEventListener
 
 from dicom_viewer.components.three_views import three_views
-from dicom_viewer.states.dicom_state import DicomViewerState
+from dicom_viewer.states.dicom_state import AUTO, PRESET_GROUPS, DicomViewerState
 
 
 def _wheel_spec(e: rx.Var) -> tuple[rx.Var[float]]:
@@ -167,40 +167,209 @@ def tutorial_dialog() -> rx.Component:
     )
 
 
-def preset_item(preset: str) -> rx.Component:
-    is_selected = DicomViewerState.selected_preset == preset
+def zoom_pan_section() -> rx.Component:
+    """Zoom and Reset All beside the pan pad, so the section is only as tall as the pad."""
+    square = "h-8 w-8 flex items-center justify-center bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors disabled:opacity-50"
+
+    def pan(icon: str, dx: int, dy: int, label: str, place: str) -> rx.Component:
+        return rx.el.button(
+            rx.icon(icon, class_name="h-4 w-4"),
+            on_click=DicomViewerState.pan_control(dx, dy),
+            title=label,
+            aria_label=label,
+            class_name=f"{square} {place}",
+        )
+
     return rx.el.div(
-        rx.el.button(
-            preset,
-            on_click=lambda: DicomViewerState.apply_preset(preset),
-            class_name=rx.cond(
-                is_selected,
-                "flex-1 text-left text-sm text-blue-200 bg-blue-600/20 border border-blue-500/40 rounded-lg px-3 py-2 transition-colors",
-                "flex-1 text-left text-sm text-slate-200 bg-slate-800/60 border border-slate-700 rounded-lg px-3 py-2 hover:bg-slate-800 transition-colors",
+        control_section_header("Zoom & Pan"),
+        rx.el.div(
+            rx.el.div(
+                rx.el.div(
+                    rx.el.button(
+                        rx.icon("minus", class_name="h-4 w-4"),
+                        on_click=DicomViewerState.zoom_out,
+                        disabled=DicomViewerState.zoom_level <= 0.25,
+                        title="Zoom out",
+                        aria_label="Zoom out",
+                        class_name=f"{square} rounded-md shrink-0",
+                    ),
+                    rx.el.span(
+                        f"{(DicomViewerState.zoom_level * 100).to_string()}%",
+                        class_name="flex-1 min-w-0 h-8 flex items-center justify-center text-sm font-mono text-blue-400 bg-slate-900/50 border border-slate-800 rounded-md",
+                    ),
+                    rx.el.button(
+                        rx.icon("plus", class_name="h-4 w-4"),
+                        on_click=DicomViewerState.zoom_in,
+                        disabled=DicomViewerState.zoom_level >= 4.0,
+                        title="Zoom in",
+                        aria_label="Zoom in",
+                        class_name=f"{square} rounded-md shrink-0",
+                    ),
+                    class_name="flex items-center gap-1",
+                ),
+                rx.el.button(
+                    "Reset All",
+                    on_click=DicomViewerState.reset_view,
+                    title="Reset zoom, pan and the window",
+                    class_name="h-8 w-full px-2 bg-slate-800 hover:bg-red-900/30 text-slate-400 hover:text-red-400 text-xs font-medium uppercase tracking-wider rounded-lg transition-colors border border-slate-800 hover:border-red-900/50",
+                ),
+                # Zoom lines up with the pad's top row, Reset All with its bottom row.
+                class_name="flex-1 min-w-0 flex flex-col justify-between",
             ),
+            rx.el.div(
+                pan("arrow-up", 0, 50, "Pan up", "col-start-2 rounded-t-lg"),
+                pan("arrow-left", 50, 0, "Pan left", "col-start-1 rounded-l-lg"),
+                rx.el.button(
+                    rx.icon("maximize", class_name="h-4 w-4"),
+                    on_click=DicomViewerState.reset_zoom,
+                    title="Reset View",
+                    aria_label="Reset View",
+                    class_name="h-8 w-8 flex items-center justify-center bg-slate-700 hover:bg-slate-600 text-blue-400 transition-colors",
+                ),
+                pan("arrow-right", -50, 0, "Pan right", "rounded-r-lg"),
+                pan("arrow-down", 0, -50, "Pan down", "col-start-2 rounded-b-lg"),
+                class_name="grid grid-cols-[repeat(3,2rem)] gap-1 shrink-0",
+            ),
+            class_name="flex gap-4",
         ),
-        rx.el.button(
-            rx.icon("circle-help", class_name="h-4 w-4"),
-            # Shown only while pointing at "?", and it ignores the pointer, so
-            # it never covers the buttons of the presets around it.
-            rx.el.span(
-                DicomViewerState.preset_tooltips[preset],
+        class_name="p-6",
+    )
+
+
+def windowing_section() -> rx.Component:
+    """Auto, the presets and the Level / Width sliders, in little height.
+
+    The presets sit in one grouped dropdown (the phone's own picker on a
+    phone), and the line under it says what the window in use is for, in the
+    language chosen beside the heading.
+    """
+    preset = DicomViewerState.selected_preset
+    is_auto = preset == AUTO
+    is_preset = (preset != "") & (preset != AUTO)
+    box = "h-9 text-sm rounded-lg border transition-colors"
+    chosen = "text-blue-200 bg-blue-950 border-blue-500/50"
+    not_chosen = "text-slate-200 bg-slate-800 border-slate-700 hover:border-slate-600"
+    picker = f"{box} w-full pl-3 pr-8 appearance-none cursor-pointer outline-none focus:ring-1 focus:ring-blue-500 truncate [&_option]:text-slate-200"
+    return rx.el.div(
+        rx.el.div(
+            control_section_header("Windowing"),
+            rx.el.label(
+                rx.icon("languages", class_name="h-3.5 w-3.5 shrink-0"),
+                rx.el.select(
+                    rx.el.option("English", value="en"),
+                    rx.el.option("繁中", value="zh-TW"),
+                    rx.el.option("简中", value="zh-CN"),
+                    rx.el.option("Español", value="es"),
+                    value=DicomViewerState.tooltip_language,
+                    on_change=DicomViewerState.set_tooltip_language,
+                    aria_label="Language",
+                    style={"colorScheme": "dark"},
+                    class_name="bg-transparent text-xs text-slate-300 outline-none cursor-pointer appearance-none [&_option]:bg-slate-900",
+                ),
+                title="Language of the descriptions and tutorials",
+                class_name="flex items-center gap-1.5 mb-4 px-2 py-1 rounded-md border border-slate-700 text-slate-400 hover:border-slate-600 focus-within:ring-1 focus-within:ring-blue-500 cursor-pointer",
+            ),
+            class_name="flex items-center justify-between",
+        ),
+        rx.el.div(
+            rx.el.button(
+                rx.icon("sparkles", class_name="h-4 w-4 mr-1.5"),
+                "Auto",
+                on_click=DicomViewerState.apply_auto_window,
+                title="The window the series opened with: the one its files suggest, or one worked out from the image",
+                aria_pressed=is_auto,
+                class_name=rx.cond(
+                    is_auto,
+                    f"{box} flex items-center px-3 font-medium shrink-0 {chosen}",
+                    f"{box} flex items-center px-3 font-medium shrink-0 {not_chosen}",
+                ),
+            ),
+            rx.el.div(
+                rx.el.select(
+                    rx.el.option("Presets…", value="", disabled=True, hidden=True),
+                    *[
+                        rx.el.optgroup(
+                            *[rx.el.option(name, value=name) for name in names],
+                            label=group,
+                        )
+                        for group, names in PRESET_GROUPS.items()
+                    ],
+                    value=rx.cond(is_preset, preset, ""),
+                    on_change=DicomViewerState.apply_preset,
+                    title="Presets for common tissues",
+                    aria_label="Preset",
+                    style={"colorScheme": "dark"},
+                    class_name=rx.cond(
+                        is_preset,
+                        f"{picker} {chosen}",
+                        f"{picker} {not_chosen} text-slate-400",
+                    ),
+                ),
+                rx.icon(
+                    "chevron-down",
+                    class_name="absolute right-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none",
+                ),
+                class_name="relative flex-1 min-w-0",
+            ),
+            class_name="flex gap-2",
+        ),
+        rx.el.div(
+            rx.el.p(
+                DicomViewerState.window_description,
+                class_name="text-xs text-slate-400 leading-relaxed",
+            ),
+            rx.el.button(
+                rx.icon("circle-help", class_name="h-4 w-4"),
+                on_click=DicomViewerState.open_tutorial_dialog,
+                title="Tutorial",
+                aria_label="Tutorial",
+                class_name="p-1 -mr-1 -mt-0.5 rounded text-slate-400 hover:text-blue-300 hover:bg-slate-800 transition-colors shrink-0",
+            ),
+            class_name="flex items-start justify-between gap-2 mt-2 mb-4",
+        ),
+        rx.el.div(
+            rx.el.div(
+                rx.el.label(
+                    "Level (Center)",
+                    class_name="text-xs font-medium text-slate-300",
+                ),
                 rx.el.span(
-                    "Click ? for the tutorial",
-                    class_name="block mt-1 text-[11px] text-blue-300",
+                    DicomViewerState.window_center.to_string(),
+                    class_name="text-xs text-blue-400 font-mono",
                 ),
-                class_name=(
-                    "absolute right-full top-1/2 -translate-y-1/2 mr-2 w-52 block "
-                    "text-left text-xs text-slate-200 bg-slate-900 border "
-                    "border-slate-700 rounded-lg shadow-xl p-2 z-50 opacity-0 "
-                    "pointer-events-none transition-opacity group-hover:opacity-100 "
-                    "group-focus-visible:opacity-100"
-                ),
+                class_name="flex justify-between mb-2",
             ),
-            on_click=lambda: DicomViewerState.open_tutorial_dialog(preset),
-            class_name="relative group ml-2 p-1 rounded text-slate-400 hover:text-blue-300 hover:bg-slate-800 transition-colors",
+            rx.el.input(
+                type="range",
+                min="-1000",
+                max="3000",
+                key=DicomViewerState.window_slider_key,
+                default_value=DicomViewerState.window_center,
+                on_change=DicomViewerState.update_window_center,
+                class_name="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer hover:bg-slate-600 transition-colors accent-blue-500",
+            ),
+            class_name="mb-4",
         ),
-        class_name="flex items-center",
+        rx.el.div(
+            rx.el.div(
+                rx.el.label("Width", class_name="text-xs font-medium text-slate-300"),
+                rx.el.span(
+                    DicomViewerState.window_width.to_string(),
+                    class_name="text-xs text-blue-400 font-mono",
+                ),
+                class_name="flex justify-between mb-2",
+            ),
+            rx.el.input(
+                type="range",
+                min="1",
+                max="4000",
+                key=DicomViewerState.window_slider_key,
+                default_value=DicomViewerState.window_width,
+                on_change=DicomViewerState.update_window_width,
+                class_name="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer hover:bg-slate-600 transition-colors accent-blue-500",
+            ),
+        ),
+        class_name="p-6 border-t border-slate-800",
     )
 
 
@@ -475,158 +644,8 @@ def viewer_sidebar() -> rx.Component:
         DicomViewerState.show_controls,
         DicomViewerState.toggle_controls,
         "lg:w-80",
-        rx.el.div(
-            control_section_header("Zoom & Pan"),
-            rx.el.div(
-                rx.el.div(
-                    rx.el.button(
-                        rx.icon("minus", class_name="h-4 w-4"),
-                        on_click=DicomViewerState.zoom_out,
-                        disabled=DicomViewerState.zoom_level <= 0.25,
-                        class_name="p-2 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 disabled:opacity-50",
-                    ),
-                    rx.el.span(
-                        f"{(DicomViewerState.zoom_level * 100).to_string()}%",
-                        class_name="text-sm font-mono text-blue-400 w-16 text-center",
-                    ),
-                    rx.el.button(
-                        rx.icon("plus", class_name="h-4 w-4"),
-                        on_click=DicomViewerState.zoom_in,
-                        disabled=DicomViewerState.zoom_level >= 4.0,
-                        class_name="p-2 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 disabled:opacity-50",
-                    ),
-                    class_name="flex items-center justify-between mb-4 bg-slate-900/50 p-2 rounded-lg border border-slate-800",
-                ),
-                rx.el.div(
-                    rx.el.button(
-                        rx.icon("arrow-up", class_name="h-5 w-5"),
-                        on_click=lambda: DicomViewerState.pan_control(0, 50),
-                        class_name="p-2 bg-slate-800 hover:bg-slate-700 rounded-t-lg mx-auto block text-slate-300",
-                    ),
-                    rx.el.div(
-                        rx.el.button(
-                            rx.icon("arrow-left", class_name="h-5 w-5"),
-                            on_click=lambda: DicomViewerState.pan_control(50, 0),
-                            class_name="p-2 bg-slate-800 hover:bg-slate-700 rounded-l-lg text-slate-300",
-                        ),
-                        rx.el.button(
-                            rx.icon("maximize", class_name="h-4 w-4"),
-                            on_click=DicomViewerState.reset_zoom,
-                            class_name="p-2 bg-slate-700 hover:bg-slate-600 text-blue-400",
-                            title="Reset View",
-                        ),
-                        rx.el.button(
-                            rx.icon("arrow-right", class_name="h-5 w-5"),
-                            on_click=lambda: DicomViewerState.pan_control(-50, 0),
-                            class_name="p-2 bg-slate-800 hover:bg-slate-700 rounded-r-lg text-slate-300",
-                        ),
-                        class_name="flex justify-center gap-1 my-1",
-                    ),
-                    rx.el.button(
-                        rx.icon("arrow-down", class_name="h-5 w-5"),
-                        on_click=lambda: DicomViewerState.pan_control(0, -50),
-                        class_name="p-2 bg-slate-800 hover:bg-slate-700 rounded-b-lg mx-auto block text-slate-300",
-                    ),
-                    class_name="mb-6",
-                ),
-                rx.el.button(
-                    "Reset All",
-                    on_click=DicomViewerState.reset_view,
-                    class_name="w-full py-2 px-4 bg-slate-800 hover:bg-red-900/30 text-slate-400 hover:text-red-400 text-xs font-medium uppercase tracking-wider rounded-lg transition-colors border border-slate-800 hover:border-red-900/50",
-                ),
-                class_name="flex flex-col",
-            ),
-            class_name="p-6",
-        ),
-        rx.el.div(
-            control_section_header("Windowing"),
-            rx.el.div(
-                rx.el.div(
-                    rx.el.label(
-                        "Selected Preset",
-                        class_name="block text-[11px] font-medium text-slate-500",
-                    ),
-                    rx.el.span(
-                        rx.cond(
-                            DicomViewerState.selected_preset != "",
-                            DicomViewerState.selected_preset,
-                            "Manual",
-                        ),
-                        class_name="text-xs text-blue-300 font-mono",
-                    ),
-                    class_name="flex items-center justify-between mb-3",
-                ),
-                rx.el.div(
-                    rx.el.label(
-                        "Level (Center)",
-                        class_name="text-xs font-medium text-slate-300",
-                    ),
-                    rx.el.span(
-                        DicomViewerState.window_center.to_string(),
-                        class_name="text-xs text-blue-400 font-mono",
-                    ),
-                    class_name="flex justify-between mb-2",
-                ),
-                rx.el.input(
-                    type="range",
-                    min="-1000",
-                    max="3000",
-                    key=DicomViewerState.window_slider_key,
-                    default_value=DicomViewerState.window_center,
-                    on_change=DicomViewerState.update_window_center,
-                    class_name="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer hover:bg-slate-600 transition-colors accent-blue-500",
-                ),
-                class_name="mb-4",
-            ),
-            rx.el.div(
-                rx.el.div(
-                    rx.el.label(
-                        "Width", class_name="text-xs font-medium text-slate-300"
-                    ),
-                    rx.el.span(
-                        DicomViewerState.window_width.to_string(),
-                        class_name="text-xs text-blue-400 font-mono",
-                    ),
-                    class_name="flex justify-between mb-2",
-                ),
-                rx.el.input(
-                    type="range",
-                    min="1",
-                    max="4000",
-                    key=DicomViewerState.window_slider_key,
-                    default_value=DicomViewerState.window_width,
-                    on_change=DicomViewerState.update_window_width,
-                    class_name="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer hover:bg-slate-600 transition-colors accent-blue-500",
-                ),
-            ),
-            rx.el.div(
-                rx.el.label(
-                    "Preset",
-                    class_name="block text-xs font-medium text-slate-400 mb-1.5",
-                ),
-                rx.el.div(
-                    rx.el.label(
-                        "Tooltip Language",
-                        class_name="block text-[11px] font-medium text-slate-500 mb-2",
-                    ),
-                    rx.el.select(
-                        rx.el.option("English", value="en"),
-                        rx.el.option("繁中", value="zh-TW"),
-                        rx.el.option("简中", value="zh-CN"),
-                        rx.el.option("Español", value="es"),
-                        value=DicomViewerState.tooltip_language,
-                        on_change=DicomViewerState.set_tooltip_language,
-                        class_name="w-full bg-slate-900 text-slate-200 text-xs rounded-lg border border-slate-700 px-3 py-2 outline-none focus:ring-1 focus:ring-blue-500 mb-4 appearance-none",
-                    ),
-                ),
-                rx.el.div(
-                    rx.foreach(DicomViewerState.preset_options, preset_item),
-                    class_name="grid gap-2",
-                ),
-                class_name="mt-4",
-            ),
-            class_name="p-6 border-t border-slate-800",
-        ),
+        zoom_pan_section(),
+        windowing_section(),
         annotations_panel(),
     )
 
