@@ -4,7 +4,7 @@ import os
 import logging
 import numpy as np
 
-from dicom_viewer import folders, series
+from dicom_viewer import folders, series, volume
 
 # Used when the files suggest no window of their own.
 DEFAULT_WINDOW = (40.0, 400.0)
@@ -21,6 +21,17 @@ _SLICE_KEY_STEPS = {
     "PageUp": -10,
     "PageDown": 10,
 }
+
+
+def _render_planes(
+    vol: volume.Volume, indices: dict[str, int], center: float, width: float
+) -> dict[str, str]:
+    return {
+        plane: series.render_png(
+            vol.plane(plane, index), vol.slope, vol.intercept, center, width
+        )
+        for plane, index in indices.items()
+    }
 
 
 class DicomViewerState(rx.State):
@@ -76,6 +87,31 @@ class DicomViewerState(rx.State):
     _cached_rescale_intercept: float = 0.0
     _cached_index: int = -1
     _refreshing: bool = False
+    # "single" shows one scanned image; "mpr" shows the series cut in three
+    # planes (axial, coronal, sagittal) that share one crosshair point.
+    view_mode: str = "single"
+    mpr_status: str = ""  # "", "loading", "ready" or "error"
+    mpr_done: int = 0
+    mpr_total: int = 0
+    mpr_error: str = ""
+    mpr_notes: list[str] = []
+    # Per plane: the slice shown, how many there are, picture width / height.
+    plane_index: dict[str, int] = {plane: 0 for plane in volume.PLANES}
+    plane_count: dict[str, int] = {plane: 0 for plane in volume.PLANES}
+    plane_ratio: dict[str, float] = {plane: 1.0 for plane in volume.PLANES}
+    # Separate vars, so redrawing one plane does not resend the other two.
+    axial_image: str = "/placeholder.svg"
+    coronal_image: str = "/placeholder.svg"
+    sagittal_image: str = "/placeholder.svg"
+    active_plane: str = "axial"
+    show_crosshair: bool = True
+    plane_slider_key: int = 0
+    crosshair_position: str = ""
+    crosshair_value: str = ""
+    _volume_key: str = ""
+    # (volume, slice, window) each plane picture was drawn for.
+    _plane_drawn: dict[str, tuple] = {}
+    _mpr_refreshing: bool = False
     _default_tutorial_links: dict[str, str] = {
         # Use same-origin static assets so the tutorial can be embedded in an iframe.
         # (Many external sites, including Wikipedia, block iframe embedding.)
@@ -435,6 +471,10 @@ class DicomViewerState(rx.State):
                 self.metadata_unlocked = False
                 self.metadata_password_input = ""
                 self.metadata_password_error = ""
+                self.view_mode = "single"
+                self.mpr_status = ""
+                self.mpr_error = ""
+                self._volume_key = ""
                 self._set_window(*self._series_window, self._series_window_preset)
             # Show the first slice before switching pages.
             await self._refresh()
@@ -445,7 +485,12 @@ class DicomViewerState(rx.State):
 
     @rx.event(background=True)
     async def refresh_image(self):
-        await self._refresh()
+        async with self:
+            mode = self.view_mode
+        if mode == "mpr":
+            await self._refresh_planes()
+        else:
+            await self._refresh()
 
     async def _refresh(self):
         """Bring the picture up to date with the slice and window in the state.
@@ -655,12 +700,263 @@ class DicomViewerState(rx.State):
     @rx.event
     def handle_slice_key(self, key: str):
         """Arrow and Page keys step through the slices; Home/End jump to the ends."""
+        if self.view_mode == "mpr":
+            plane = self.active_plane
+            index = self.plane_index.get(plane, 0)
+            if key == "Home":
+                return self._move_plane(plane, 0)
+            if key == "End":
+                return self._move_plane(plane, self.plane_count.get(plane, 0) - 1)
+            if key in _SLICE_KEY_STEPS:
+                return self._move_plane(plane, index + _SLICE_KEY_STEPS[key])
+            return None
         if key == "Home":
             return self._go_to_slice(0)
         if key == "End":
             return self._go_to_slice(self.total_images - 1)
         if key in _SLICE_KEY_STEPS:
             return self._go_to_slice(self.current_index + _SLICE_KEY_STEPS[key])
+
+    @rx.var
+    def mpr_percent(self) -> int:
+        if not self.mpr_total:
+            return 0
+        return round(100 * self.mpr_done / self.mpr_total)
+
+    @rx.var
+    def plane_position_text(self) -> dict[str, str]:
+        return {
+            plane: f"{self.plane_index.get(plane, 0) + 1} / {self.plane_count.get(plane, 0)}"
+            for plane in volume.PLANES
+        }
+
+    @rx.var
+    def crosshair(self) -> dict[str, float]:
+        """Where each plane crosses the other views, in % of their width or height.
+
+        Only the axial index is drawn upside down (head at the top).
+        """
+        place = {}
+        for plane in volume.PLANES:
+            count = max(1, self.plane_count.get(plane, 0))
+            index = self.plane_index.get(plane, 0)
+            if plane == "axial":
+                index = count - 1 - index
+            place[plane] = (index + 0.5) / count * 100
+        return place
+
+    @rx.event
+    def set_view_mode(self, mode: str):
+        if mode == self.view_mode or mode not in ("single", "mpr"):
+            return None
+        self.view_mode = mode
+        if mode == "mpr":
+            return DicomViewerState.load_volume
+        # Back in one view, show the scanned image the crosshair is on.
+        vol = volume.cached(self._volume_key)
+        if vol is not None and self.mpr_status == "ready":
+            path = vol.path_at(self.plane_index)
+            if path in self._series_files:
+                self._go_to_slice(self._series_files.index(path))
+        return DicomViewerState.refresh_image
+
+    @rx.event(background=True)
+    async def load_volume(self):
+        await self._load_volume()
+
+    async def _load_volume(self, rebuild: bool = False):
+        """Stack the open series into a volume (or reuse it) and draw the planes.
+
+        `rebuild` is for a volume dropped from the cache while in use: its
+        crosshair stays where it was.
+        """
+        async with self:
+            if self.mpr_status == "loading" or not self._series_files:
+                return
+            files = list(self._series_files)
+            version = self._series_version
+            # Start on the image shown in one view, or in the middle of the
+            # volume while one view is still on the first image.
+            current_path = files[self.current_index] if self.current_index else ""
+            key = volume.cache_key(files)
+            vol = volume.cached(key)
+            if vol is None:
+                self.mpr_status = "loading"
+                self.mpr_done = 0
+                self.mpr_total = 0
+                self.mpr_error = ""
+        if vol is None:
+            try:
+                layout = await asyncio.to_thread(volume.read_layout, files)
+                async with self:
+                    self.mpr_total = len(layout.paths)
+                slices = []
+                for start in range(0, len(layout.paths), _OPEN_BATCH):
+                    batch = layout.paths[start : start + _OPEN_BATCH]
+                    slices += await asyncio.to_thread(volume.read_pixels, batch)
+                    async with self:
+                        if self._series_version != version:
+                            self.mpr_status = ""
+                            return
+                        self.mpr_done = start + len(batch)
+                vol = await asyncio.to_thread(volume.assemble, layout, slices)
+            except Exception as e:
+                if not isinstance(e, volume.VolumeError):
+                    logging.exception(f"Error building the volume: {e}")
+                async with self:
+                    if self._series_version == version:
+                        self.mpr_status = "error"
+                        self.mpr_error = (
+                            str(e)
+                            if isinstance(e, volume.VolumeError)
+                            else self._format_dicom_error(e)
+                        )
+                    else:
+                        self.mpr_status = ""
+                return
+            volume.store(key, vol)
+        async with self:
+            if self._series_version != version:
+                self.mpr_status = ""
+                return
+            cursor = vol.cursor_at(current_path)
+            if self._volume_key != key:
+                self._volume_key = key
+                self._plane_drawn = {}
+                self.plane_count = {plane: vol.count(plane) for plane in volume.PLANES}
+                self.plane_ratio = {plane: vol.ratio(plane) for plane in volume.PLANES}
+                self.plane_index = cursor
+                self.active_plane = vol.scan_plane
+                self.mpr_notes = volume.notes(vol)
+            elif not rebuild:
+                # Seen before: follow one view's image, keep the other planes.
+                self.plane_index[vol.scan_plane] = cursor[vol.scan_plane]
+            self.plane_slider_key += 1
+            self._update_crosshair_info(vol)
+            self.mpr_status = "ready"
+        await self._refresh_planes()
+
+    async def _refresh_planes(self):
+        """Bring the three plane pictures up to date; coalesces like _refresh."""
+        async with self:
+            if self._mpr_refreshing:
+                return
+            self._mpr_refreshing = True
+        done = missing = False
+        try:
+            while True:
+                async with self:
+                    key = self._volume_key
+                    window = (self.window_center, self.window_width)
+                    wanted = {
+                        plane: (key, self.plane_index[plane], *window)
+                        for plane in volume.PLANES
+                    }
+                    stale = [
+                        plane
+                        for plane in volume.PLANES
+                        if self._plane_drawn.get(plane) != wanted[plane]
+                    ]
+                    vol = volume.cached(key)
+                    if self.view_mode != "mpr" or self.mpr_status != "ready" or not stale:
+                        self._mpr_refreshing = False
+                        done = True
+                        return
+                    if vol is None:
+                        # Dropped from the cache to make room for other volumes.
+                        self.mpr_status = ""
+                        self._mpr_refreshing = False
+                        done = missing = True
+                        break
+                images = await asyncio.to_thread(
+                    _render_planes, vol, {p: wanted[p][1] for p in stale}, *window
+                )
+                async with self:
+                    if self._volume_key != key:
+                        continue
+                    drawn = dict(self._plane_drawn)
+                    for plane, image in images.items():
+                        setattr(self, f"{plane}_image", image)
+                        drawn[plane] = wanted[plane]
+                    self._plane_drawn = drawn
+        finally:
+            if not done:
+                async with self:
+                    self._mpr_refreshing = False
+        if missing:
+            await self._load_volume(rebuild=True)
+
+    def _update_crosshair_info(self, vol: volume.Volume | None = None):
+        vol = vol or volume.cached(self._volume_key)
+        if vol is None:
+            return
+        z, y, x = (self.plane_index[plane] for plane in volume.PLANES)
+        px, py, pz = vol.position(z, y, x)
+        self.crosshair_position = (
+            f"{'L' if px >= 0 else 'R'} {abs(px):.1f} · "
+            f"{'P' if py >= 0 else 'A'} {abs(py):.1f} · "
+            f"{'S' if pz >= 0 else 'I'} {abs(pz):.1f} mm"
+        )
+        value = vol.value(z, y, x)
+        text = f"{value:.0f}" if float(value).is_integer() else f"{value:.1f}"
+        self.crosshair_value = f"{text} HU" if self.modality == "CT" else text
+
+    def _move_plane(self, plane: str, index: int, from_slider: bool = False):
+        """Show slice `index` (clamped) of `plane`; refresh_image redraws."""
+        count = self.plane_count.get(plane, 0)
+        if not count:
+            return None
+        self.active_plane = plane
+        index = max(0, min(count - 1, index))
+        if index == self.plane_index[plane]:
+            return None
+        self.plane_index[plane] = index
+        if not from_slider:
+            self.plane_slider_key += 1
+        self._update_crosshair_info()
+        return DicomViewerState.refresh_image
+
+    @rx.event
+    def scroll_plane(self, delta_y: float, plane: str):
+        """Mouse wheel over a plane: down is its next slice, up the previous."""
+        if delta_y and plane in self.plane_index:
+            step = 1 if delta_y > 0 else -1
+            return self._move_plane(plane, self.plane_index[plane] + step)
+
+    @rx.event
+    def set_plane_index(self, plane: str, value: str):
+        try:
+            index = int(float(value))
+        except ValueError as e:
+            logging.exception(f"Error setting the {plane} slice: {e}")
+            return
+        return self._move_plane(plane, index, from_slider=True)
+
+    @rx.event
+    def click_plane(self, fx: float, fy: float, plane: str):
+        """A click in a plane moves the crosshair there, in the other two planes."""
+        if plane not in volume.SCREEN_AXES or not (0 <= fx <= 1 and 0 <= fy <= 1):
+            return None
+        self.active_plane = plane
+        horizontal, vertical = volume.SCREEN_AXES[plane]
+        changed = False
+        for other, fraction in ((horizontal, fx), (vertical, fy)):
+            count = self.plane_count.get(other, 0)
+            index = min(count - 1, int(fraction * count))
+            if other == "axial":
+                index = count - 1 - index
+            if count and index != self.plane_index[other]:
+                self.plane_index[other] = index
+                changed = True
+        if not changed:
+            return None
+        self.plane_slider_key += 1
+        self._update_crosshair_info()
+        return DicomViewerState.refresh_image
+
+    @rx.event
+    def toggle_crosshair(self):
+        self.show_crosshair = not self.show_crosshair
 
     @rx.event
     def set_zoom(self, value: float):

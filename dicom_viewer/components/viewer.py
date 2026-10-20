@@ -1,6 +1,7 @@
 import reflex as rx
 from reflex_components_core.core.window_events import WindowEventListener
 
+from dicom_viewer.components.three_views import three_views
 from dicom_viewer.states.dicom_state import DicomViewerState
 
 
@@ -402,6 +403,32 @@ def viewer_sidebar() -> rx.Component:
     )
 
 
+def view_mode_switch() -> rx.Component:
+    def option(mode: str, icon: str, label: str, hint: str) -> rx.Component:
+        return rx.el.button(
+            rx.icon(icon, class_name="h-4 w-4 mr-1.5"),
+            label,
+            on_click=DicomViewerState.set_view_mode(mode),
+            title=hint,
+            class_name=rx.cond(
+                DicomViewerState.view_mode == mode,
+                "flex items-center px-3 py-1 rounded-md bg-blue-600 text-white text-sm font-medium",
+                "flex items-center px-3 py-1 rounded-md text-slate-400 hover:text-slate-100 text-sm font-medium",
+            ),
+        )
+
+    return rx.el.div(
+        option("single", "square", "1 view", "One scanned image at a time"),
+        option(
+            "mpr",
+            "layout-grid",
+            "3 views",
+            "The series cut three ways: axial, coronal and sagittal (MPR)",
+        ),
+        class_name="flex items-center gap-0.5 p-0.5 bg-slate-800 rounded-lg border border-slate-700",
+    )
+
+
 def top_bar() -> rx.Component:
     return rx.el.div(
         rx.el.div(
@@ -435,6 +462,7 @@ def top_bar() -> rx.Component:
         rx.cond(
             DicomViewerState.total_images > 0,
             rx.el.div(
+                view_mode_switch(),
                 rx.el.button(
                     rx.icon("info", class_name="h-4 w-4 mr-2"),
                     rx.cond(
@@ -443,14 +471,17 @@ def top_bar() -> rx.Component:
                     on_click=DicomViewerState.toggle_metadata,
                     class_name="flex items-center text-slate-400 hover:text-blue-400 transition-colors text-sm font-medium",
                 ),
-                rx.el.div(
-                    rx.icon("layers", class_name="h-4 w-4 mr-2 text-blue-400"),
-                    rx.el.span(
-                        DicomViewerState.current_position_text,
-                        class_name="font-mono text-sm text-slate-300",
+                rx.cond(
+                    DicomViewerState.view_mode == "single",
+                    rx.el.div(
+                        rx.icon("layers", class_name="h-4 w-4 mr-2 text-blue-400"),
+                        rx.el.span(
+                            DicomViewerState.current_position_text,
+                            class_name="font-mono text-sm text-slate-300",
+                        ),
+                        title="Slice / slices in this series",
+                        class_name="flex items-center bg-slate-800 px-3 py-1.5 rounded-full border border-slate-700",
                     ),
-                    title="Slice / slices in this series",
-                    class_name="flex items-center bg-slate-800 px-3 py-1.5 rounded-full border border-slate-700",
                 ),
                 class_name="flex items-center gap-6 shrink-0",
             ),
@@ -536,20 +567,26 @@ def viewer_layout() -> rx.Component:
             rx.el.div(
                 metadata_panel(),
                 rx.el.div(
-                    WheelArea.create(
-                        rx.image(
-                            src=DicomViewerState.current_image_base64,
-                            style={
-                                "transform": f"translate({DicomViewerState.pan_x}px, {DicomViewerState.pan_y}px) scale({DicomViewerState.zoom_level})",
-                                "transition": "transform 0.1s ease-out",
-                            },
-                            class_name="max-h-full max-w-full object-contain pointer-events-none select-none",
-                            alt="DICOM Image",
+                    rx.cond(
+                        DicomViewerState.view_mode == "mpr",
+                        three_views(),
+                        rx.fragment(
+                            WheelArea.create(
+                                rx.image(
+                                    src=DicomViewerState.current_image_base64,
+                                    style={
+                                        "transform": f"translate({DicomViewerState.pan_x}px, {DicomViewerState.pan_y}px) scale({DicomViewerState.zoom_level})",
+                                        "transition": "transform 0.1s ease-out",
+                                    },
+                                    class_name="max-h-full max-w-full object-contain pointer-events-none select-none",
+                                    alt="DICOM Image",
+                                ),
+                                on_wheel=DicomViewerState.scroll_slices.throttle(60),
+                                class_name="flex-1 min-h-0 bg-black relative flex items-center justify-center overflow-hidden w-full",
+                            ),
+                            slice_bar(),
                         ),
-                        on_wheel=DicomViewerState.scroll_slices.throttle(60),
-                        class_name="flex-1 min-h-0 bg-black relative flex items-center justify-center overflow-hidden w-full",
                     ),
-                    slice_bar(),
                     class_name="flex flex-col flex-1 min-w-0",
                 ),
                 viewer_sidebar(),
