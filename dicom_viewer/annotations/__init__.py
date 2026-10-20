@@ -45,6 +45,7 @@ from dicom_viewer.annotations.registry import (
     is_annotation_file,
     layers_for_folder,
     load_layers,
+    needed_series,
     register,
     sop_class_of,
     unregister,
@@ -58,5 +59,5 @@ __all__ = [
     "RGB", "Adapter", "BaseLayer", "Item", "ItemKind", "Label", "Layer", "LayerError",
     "Mask", "SeriesInfo", "Shape", "ShapeKind", "SliceOverlay", "SliceRef",
     "adapter_for", "adapters", "find_annotation_files", "find_layer_files", "is_annotation_file",
-    "layers_for_folder", "load_layers", "register", "sop_class_of", "unregister",
+    "layers_for_folder", "load_layers", "needed_series", "register", "sop_class_of", "unregister",
 ]

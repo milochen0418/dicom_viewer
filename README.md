@@ -54,6 +54,16 @@ portals such as the Imaging Data Commons produce. Press **Open** on a folder
 with images. A folder holding an annotation object (here a SEG) is listed
 too; its annotations are shown together with the images they belong to.
 
+![Fetching the images an annotation needs](docs/images/fetch-images.png)
+
+An annotation folder's row offers **Open** when the images it belongs to
+are downloaded (they are opened with the annotation on top), and **Get
+images** when they are not: that button opens [DICOM Data Explorer](https://github.com/milochen0418/dicom_data_explorer)
+in a dialog (a DDNS Intent), listing the series the annotation refers to.
+Download them there; as soon as they are in, the dialog closes and the viewer
+opens the series with the annotation on top. This needs both apps installed
+in the App Store; on a developer machine see [Configuration](#configuration).
+
 ### 3) The viewer
 
 ![One view](docs/images/viewer-one-view.png)
@@ -139,6 +149,12 @@ with tabs to switch.
 |---|---|---|
 | `PUBLIC_DICOM_DIR` | `/Users/Shared/DICOM` on macOS (or wherever that folder exists), else your home folder | The folder the browser starts in. Nothing above it can be opened. |
 | `DICOM_METADATA_PASSWORD` | `dicom` | Unlocks the patient name, ID and study date in the metadata panel. |
+| `DDNS_INTENT_URL_DICOM_DATA_EXPLORER` | `https://dicom-data-explorer.reflex-ddns.com` | Where **Get images** opens DICOM Data Explorer; point it at a local copy (e.g. `http://localhost:3100`) when developing. |
+| `DDNS_INTENT_TRUST_LOCALHOST` | unset | `1` lets the two apps talk when both run on localhost. |
+
+**Get images** is available when the viewer is installed with the
+`reflex_ddns_auth` library (the App Store does this); without it the button
+is simply not shown.
 
 ## Data
 

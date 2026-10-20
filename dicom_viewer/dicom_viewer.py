@@ -1,4 +1,10 @@
 import reflex as rx
+
+try:
+    from reflex_ddns_auth.intent import install_intent_host
+except ImportError:  # a standalone viewer, without the DDNS libraries
+    install_intent_host = None
+
 from dicom_viewer.states.browser_state import FolderBrowserState
 from dicom_viewer.components.folder_browser import folder_page
 from dicom_viewer.components.viewer import viewer_layout
@@ -37,5 +43,8 @@ app = rx.App(
         ),
     ],
 )
+# Dialogs of other apps (DICOM Data Explorer fetching images) live above every page.
+if install_intent_host is not None:
+    install_intent_host(app)
 app.add_page(index, route="/", on_load=FolderBrowserState.on_load)
 app.add_page(viewer_layout, route="/viewer")

@@ -438,3 +438,24 @@ def test_layers_for_folder_scans_siblings_inside_the_root(library, fake_adapter,
     # Outside the viewer's root the siblings are not touched.
     monkeypatch.setenv("PUBLIC_DICOM_DIR", str(library / "series_a"))
     assert layers_for_folder(series_a, str(library / "series_a")) == []
+
+
+def test_folder_rows_tell_which_series_are_missing():
+    from dicom_viewer import folders
+    from dicom_viewer.states.browser_state import _present, _rows
+
+    summaries = {
+        "/x/ct": folders.FolderSummary(dicom_count=3, label="CT", series_uid="1.2.3"),
+        "/x/seg": folders.FolderSummary(annotation_count=1, label="SEG", references=["1.2.3"]),
+        "/x/rt": folders.FolderSummary(annotation_count=1, label="RTSTRUCT", references=["1.2.3", "9.9.9"]),
+    }
+    checking = _rows("/x", ["ct", "seg", "rt", "new"], summaries)
+    assert [row.missing for row in checking] == ["", "", "", ""]  # not known yet
+    assert checking[3].checked is False
+    assert _present(summaries) == {"1.2.3": "/x/ct"}
+    rows = _rows("/x", ["ct", "seg", "rt"], summaries, _present(summaries))
+    assert rows[0].series_uid == "1.2.3" and rows[0].missing == "" and rows[0].opens == ""
+    assert rows[1].missing == "" and rows[1].missing_count == 0 and rows[1].opens == "/x/ct"
+    assert rows[2].missing == "9.9.9" and rows[2].missing_count == 1 and rows[2].opens == "/x/ct"
+    assert _present(summaries, "7.7.7", "/x") == {"1.2.3": "/x/ct", "7.7.7": "/x"}
+    assert _present(summaries, "1.2.3", "/x") == {"1.2.3": "/x/ct"}  # a folder's own images win nothing

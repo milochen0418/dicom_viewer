@@ -1,5 +1,10 @@
 import reflex as rx
 
+try:
+    from reflex_ddns_auth.intent import Intent
+except ImportError:  # a standalone viewer: no DICOM Data Explorer to fetch images with
+    Intent = None
+
 from dicom_viewer.states.browser_state import Crumb, FolderBrowserState, FolderEntry
 from dicom_viewer.states.dicom_state import DicomViewerState
 
@@ -34,6 +39,35 @@ def open_button(path, label: str, large: bool = False) -> rx.Component:
             "flex items-center whitespace-nowrap rounded-lg font-medium text-white "
             "bg-blue-600 hover:bg-blue-500 transition-colors shadow-lg "
             "hover:shadow-blue-500/25 disabled:opacity-50 "
+            + ("px-5 py-2.5 text-sm" if large else "px-3 py-1.5 text-xs")
+        ),
+    )
+
+
+def fetch_button(missing, label, large: bool = False) -> rx.Component:
+    """Opens DICOM Data Explorer in a dialog to download the series an annotation needs.
+
+    `missing` is the comma-separated SeriesInstanceUIDs; `label` names the annotation.
+    Without the DDNS libraries there is nothing to open, so nothing is shown.
+    """
+    if Intent is None:
+        return rx.fragment()
+    return rx.el.button(
+        rx.icon("cloud-download", class_name="h-4 w-4 mr-1.5"),
+        "Get images",
+        on_click=Intent.start(
+            "dicom-data-explorer",
+            "dicom.fetch-series",
+            on_result=FolderBrowserState.images_fetched,
+            on_cancel=FolderBrowserState.fetch_cancelled,
+            label="Get images",
+            series=missing,
+            title=label,
+        ),
+        title="Download the images this annotation belongs to, with DICOM Data Explorer",
+        class_name=(
+            "flex items-center whitespace-nowrap rounded-lg font-medium text-amber-100 "
+            "bg-amber-700/80 hover:bg-amber-600 transition-colors shadow-lg "
             + ("px-5 py-2.5 text-sm" if large else "px-3 py-1.5 text-xs")
         ),
     )
@@ -157,6 +191,55 @@ def here_card() -> rx.Component:
     )
 
 
+def here_annotation_card() -> rx.Component:
+    """Shown when the current folder holds annotations but no images."""
+    return rx.cond(
+        (FolderBrowserState.here_dicom_count == 0) & (FolderBrowserState.here_annotation_count > 0),
+        rx.el.div(
+            rx.el.div(
+                rx.icon("layers", class_name="h-6 w-6 text-amber-300"),
+                class_name="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 shrink-0",
+            ),
+            rx.el.div(
+                rx.el.p(
+                    "This folder holds annotations for images kept elsewhere",
+                    class_name="text-sm font-semibold text-slate-100",
+                ),
+                rx.el.p(
+                    _plural(FolderBrowserState.here_annotation_count, "annotation", "annotations"),
+                    rx.cond(
+                        FolderBrowserState.here_label != "",
+                        rx.fragment(" · ", FolderBrowserState.here_label),
+                    ),
+                    rx.cond(
+                        FolderBrowserState.here_missing != "",
+                        " · the images are not downloaded yet",
+                        rx.cond(
+                            FolderBrowserState.here_opens != "",
+                            " · press Open images to see them with it",
+                            " · the images are in a folder beside this one: go up and open them",
+                        ),
+                    ),
+                    class_name="text-xs text-slate-400 truncate mt-0.5",
+                ),
+                class_name="flex-1 min-w-0",
+            ),
+            rx.el.div(
+                rx.cond(
+                    FolderBrowserState.here_opens != "",
+                    open_button(FolderBrowserState.here_opens, "Open images", large=True),
+                ),
+                rx.cond(
+                    FolderBrowserState.here_missing != "",
+                    fetch_button(FolderBrowserState.here_missing, FolderBrowserState.here_label, large=True),
+                ),
+                class_name="flex items-center gap-2 shrink-0",
+            ),
+            class_name="flex items-center gap-4 m-4 p-4 rounded-xl bg-slate-800/60 border border-amber-500/30",
+        ),
+    )
+
+
 def entry_details(entry: FolderEntry) -> rx.Component:
     return rx.el.p(
         rx.cond(
@@ -191,7 +274,15 @@ def entry_details(entry: FolderEntry) -> rx.Component:
                         rx.fragment(
                             _plural(entry.annotation_count, "annotation", "annotations"),
                             rx.cond(entry.label != "", rx.fragment(" · ", entry.label)),
-                            " · shown with the images they belong to",
+                            rx.cond(
+                                entry.missing != "",
+                                " · the images are not downloaded yet",
+                                rx.cond(
+                                    entry.opens != "",
+                                    " · press Open to see it on its images",
+                                    " · shown with the images they belong to",
+                                ),
+                            ),
                         ),
                         rx.cond(
                             entry.folder_count > 0,
@@ -248,7 +339,19 @@ def folder_row(entry: FolderEntry) -> rx.Component:
             on_click=lambda clicks: FolderBrowserState.open_folder(entry.path, clicks),
             class_name="flex flex-1 min-w-0 items-center gap-3 px-4 py-3 text-left",
         ),
-        rx.cond(has_dicom, rx.el.div(open_button(entry.path, "Open"), class_name="pr-4 shrink-0")),
+        rx.cond(
+            has_dicom,
+            rx.el.div(open_button(entry.path, "Open"), class_name="pr-4 shrink-0"),
+            rx.cond(
+                (entry.opens != "") | (entry.missing != ""),
+                rx.el.div(
+                    # Downloaded images: open them, the annotation comes along.
+                    rx.cond(entry.opens != "", open_button(entry.opens, "Open")),
+                    rx.cond(entry.missing != "", fetch_button(entry.missing, entry.label)),
+                    class_name="flex items-center gap-2 pr-4 shrink-0",
+                ),
+            ),
+        ),
         class_name="flex items-center border-b border-slate-800 last:border-b-0 hover:bg-slate-800/50 transition-colors",
     )
 
@@ -360,6 +463,7 @@ def folder_page() -> rx.Component:
             ),
             rx.el.div(
                 here_card(),
+        here_annotation_card(),
                 folder_list(),
                 empty_state(),
                 class_name=rx.cond(

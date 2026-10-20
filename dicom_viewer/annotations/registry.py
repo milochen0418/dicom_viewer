@@ -15,6 +15,7 @@ import pydicom
 
 from dicom_viewer import folders
 from dicom_viewer.annotations.model import Adapter, Layer, LayerError, SeriesInfo
+from dicom_viewer.annotations.support import referenced_series_uids
 
 _adapters: dict[str, Adapter] = {}
 
@@ -59,6 +60,15 @@ def sop_class_of(path: str) -> str:
 def is_annotation_file(path: str) -> bool:
     """Whether a registered adapter reads this file."""
     return adapter_for(sop_class_of(path)) is not None
+
+
+def needed_series(path: str) -> set[str]:
+    """SeriesInstanceUIDs of the images the annotation file at `path` is for; empty when unreadable."""
+    try:
+        ds = pydicom.dcmread(path, stop_before_pixels=True)
+    except Exception:
+        return set()
+    return referenced_series_uids(ds)
 
 
 def find_annotation_files(folders_to_scan: Iterable[str], *, thorough: bool = True) -> list[str]:

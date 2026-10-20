@@ -247,3 +247,40 @@ def test_layers_for_folder_finds_every_format(tmp_path, monkeypatch):
     # The other series shares the frame of reference: the structure set applies, the GSPS does not.
     layers = layers_for_folder(series_info(refs_of(others)), str(tmp_path / "images"))
     assert [layer.format for layer in layers] == ["RTSTRUCT"]
+
+
+# --- which images an annotation is for ---
+
+
+def test_needed_series_reads_every_format(tmp_path, ct):
+    from dicom_viewer import folders
+    from dicom_viewer.annotations import needed_series
+
+    masks = np.zeros((3, 8, 8, 2), dtype=bool)
+    masks[1, 2:6, 2:6, 0] = True
+    expected = {ct[0].SeriesInstanceUID}
+    objects = {
+        "seg.dcm": synth.seg_for(ct, masks),
+        "rt.dcm": synth.rtstruct_for(ct, {"Organ": [(1, ORGAN)]}),
+        "pr.dcm": synth.gsps_for(ct),
+        "sr.dcm": synth.sr_for(ct),
+    }
+    (tmp_path / "objects").mkdir()
+    for name, ds in objects.items():
+        assert needed_series(synth.save(ds, tmp_path / "objects" / name)) == expected, name
+    assert needed_series(str(tmp_path / "ct0.dcm")) == set()  # an image names nothing
+    assert needed_series(str(tmp_path / "nope.dcm")) == set()
+
+    # A folder of annotations only says which series it needs; one with images says its own.
+    (tmp_path / "ann").mkdir()
+    synth.save(objects["seg.dcm"], tmp_path / "ann" / "seg.dcm")
+    summary = folders.summarize_folder(str(tmp_path / "ann"))
+    assert (summary.dicom_count, summary.annotation_count) == (0, 1)
+    assert summary.series_uid == "" and summary.references == sorted(expected)
+    images = folders.summarize_folder(str(tmp_path))
+    assert images.dicom_count == 3 and images.series_uid == ct[0].SeriesInstanceUID
+    assert images.references == []
+    assert folders.present_series(str(tmp_path)) == {}  # "ann" and "objects" hold no images
+    (tmp_path / "images").mkdir()
+    synth.ct_series(tmp_path / "images", series_uid="1.2.3.9")
+    assert folders.present_series(str(tmp_path)) == {"1.2.3.9": str(tmp_path / "images")}

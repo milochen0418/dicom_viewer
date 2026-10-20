@@ -53,6 +53,28 @@ def referenced_instances(ds) -> set[str]:
     return found
 
 
+def referenced_series_uids(ds) -> set[str]:
+    """SeriesInstanceUIDs of the images an annotation object says it is for.
+
+    Looks where each kind of object keeps them: ReferencedSeriesSequence
+    (SEG, presentation states), the RT referenced study and series tree
+    (RTSTRUCT) and the evidence sequence (SR). Empty when it names none.
+    """
+    found = referenced_series(ds)
+    for referenced in ds.get("ReferencedFrameOfReferenceSequence", []):
+        for study in referenced.get("RTReferencedStudySequence", []):
+            for series in study.get("RTReferencedSeriesSequence", []):
+                uid = text(series, "SeriesInstanceUID")
+                if uid:
+                    found.add(uid)
+    for study in ds.get("CurrentRequestedProcedureEvidenceSequence", []):
+        for series in study.get("ReferencedSeriesSequence", []):
+            uid = text(series, "SeriesInstanceUID")
+            if uid:
+                found.add(uid)
+    return found
+
+
 def matches(
     series: SeriesInfo,
     *,

@@ -14,6 +14,8 @@ pydicom = "*"
 pillow = "*"
 numpy = "*"
 highdicom = "^0.28.2"
+# DDNS Intent: opens DICOM Data Explorer in a dialog to fetch the images an annotation needs.
+reflex-ddns-auth = {path = "../reflex_ddns_auth", develop = true}
 
 [build-system]
 requires = ["poetry-core>=1.8.0"]

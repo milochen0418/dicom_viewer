@@ -305,6 +305,20 @@ How each adapter matches slices:
 - **Panel** (`components/viewer.py`, `annotations_panel`): opacity slider,
   measurement text switch, one block per layer with its format badge,
   checkbox, items and notes, and the load errors underneath.
+- **Fetching the images an annotation needs** (folder page): an annotation
+  object says which series it is for (`support.referenced_series_uids`,
+  `registry.needed_series`), and `folders.summarize_folder` records that for
+  a folder that holds annotations only. The folder page compares those
+  series with the ones on disk beside it (`folders.present_series`,
+  `browser_state._rows`): for a series that is there, the row offers
+  **Open** on that folder (`FolderEntry.opens`); for the missing ones it
+  shows **Get images**, which opens DICOM Data Explorer's `dicom.fetch-series` intent in a dialog
+  (`Intent.start` from `reflex_ddns_auth`, params `series` = comma-separated
+  SeriesInstanceUIDs and `title`). The explorer downloads them into the
+  shared collection and finishes with `{"series": [...], "downloaded":
+  [...]}`; `FolderBrowserState.images_fetched` lists the folder again and
+  opens the first series fetched, where the annotation is found as usual.
+  Without `reflex_ddns_auth` installed the button is not rendered.
 
 ## 11. Limits and extension points
 

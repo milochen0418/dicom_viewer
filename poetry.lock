@@ -686,6 +686,21 @@ files = [
 numpy = ">=2.0"
 
 [[package]]
+name = "pyjwt"
+version = "2.15.1"
+description = "JSON Web Token implementation in Python"
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "pyjwt-2.15.1-py3-none-any.whl", hash = "sha256:42d59d631f7768a1028a64c7ff581a9bf7519804daf91fc5b6c56e30eec5e193"},
+    {file = "pyjwt-2.15.1.tar.gz", hash = "sha256:4f259e80cdfb6b3fc18a7de51fd1ef9ec79652f25019bae68975ca2468a34df8"},
+]
+
+[package.extras]
+crypto = ["cryptography (>=3.4.0)"]
+
+[[package]]
 name = "pytest"
 version = "9.1.1"
 description = "pytest: simple powerful testing with Python"
@@ -1068,6 +1083,24 @@ reflex-base = ">=0.10.0"
 reflex-components-lucide = ">=1.1.0"
 
 [[package]]
+name = "reflex-ddns-auth"
+version = "0.1.0"
+description = "Shared SSO AuthState for Reflex apps on *.reflex-ddns.com"
+optional = false
+python-versions = ">=3.11,<3.16"
+groups = ["main"]
+files = []
+develop = true
+
+[package.dependencies]
+PyJWT = ">=2.8"
+reflex = ">=0.6"
+
+[package.source]
+type = "directory"
+url = "../reflex_ddns_auth"
+
+[[package]]
 name = "reflex-hosting-cli"
 version = "0.2.0"
 description = "Reflex Hosting CLI"
@@ -1416,4 +1449,4 @@ h11 = ">=0.16.0,<1"
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.15"
-content-hash = "9dd61a1dfe7ba72b589ed7457a182979cb38b52bd37bdf6a93881be5b4443c55"
+content-hash = "343a52fbcf4cc912ce4b0d06e329745921b0bbd9a4ea855efa5de2a9b8582e1a"

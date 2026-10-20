@@ -21,7 +21,13 @@ _SHARED_DICOM_DIR = "/Users/Shared/DICOM"
 _PREAMBLE_LENGTH = 128
 _DICOM_PREFIX = b"DICM"
 
-_LABEL_TAGS = ["Modality", "SeriesDescription", "StudyDescription", "BodyPartExamined"]
+_LABEL_TAGS = [
+    "Modality",
+    "SeriesDescription",
+    "StudyDescription",
+    "BodyPartExamined",
+    "SeriesInstanceUID",
+]
 
 
 def dicom_root() -> str:
@@ -119,14 +125,14 @@ def image_files(path: str, listing: Listing | None = None) -> list[str]:
     ]
 
 
-def series_label(file_path: str) -> str:
-    """Short description of a file's series, e.g. "CT · CHEST 1.25MM"."""
+def series_facts(file_path: str) -> tuple[str, str]:
+    """(label, SeriesInstanceUID) of a file's series, e.g. ("CT · CHEST 1.25MM", "1.2…")."""
     try:
         ds = pydicom.dcmread(
             file_path, stop_before_pixels=True, specific_tags=_LABEL_TAGS
         )
     except Exception:
-        return ""
+        return "", ""
 
     def text(keyword: str) -> str:
         return str(ds.get(keyword, "") or "").strip()
@@ -134,7 +140,33 @@ def series_label(file_path: str) -> str:
     description = (
         text("SeriesDescription") or text("StudyDescription") or text("BodyPartExamined")
     )
-    return " · ".join(part for part in (text("Modality"), description) if part)
+    label = " · ".join(part for part in (text("Modality"), description) if part)
+    return label, text("SeriesInstanceUID")
+
+
+def series_label(file_path: str) -> str:
+    """Short description of a file's series, e.g. "CT · CHEST 1.25MM"."""
+    return series_facts(file_path)[0]
+
+
+def present_series(parent: str) -> dict[str, str]:
+    """The image series in the folders directly inside `parent`: SeriesInstanceUID -> folder."""
+    found: dict[str, str] = {}
+    try:
+        listing = list_folder(parent)
+    except OSError:
+        return found
+    for name in listing.folders:
+        folder = os.path.join(parent, name)
+        try:
+            files = dicom_files(folder)
+        except OSError:
+            continue
+        if files and not annotation_files(files[:1]):
+            uid = series_facts(files[0])[1]
+            if uid:
+                found.setdefault(uid, folder)
+    return found
 
 
 @dataclasses.dataclass
@@ -143,6 +175,9 @@ class FolderSummary:
     dicom_count: int = 0  # images
     annotation_count: int = 0
     label: str = ""
+    series_uid: str = ""  # of the images; "" for a folder without images
+    # Series the annotations need, for a folder that holds annotations only.
+    references: list[str] = dataclasses.field(default_factory=list)
     error: str = ""
 
 
@@ -157,11 +192,20 @@ def summarize_folder(path: str, listing: Listing | None = None) -> FolderSummary
         return FolderSummary(error=f"Cannot open: {error.strerror or error}")
     annotations = annotation_files(files)
     images = [path for path in files if path not in set(annotations)]
+    label, series_uid = series_facts((images or annotations)[0]) if files else ("", "")
+    references: set[str] = set()
+    if annotations and not images:
+        from dicom_viewer.annotations import registry
+
+        for path in annotations:
+            references |= registry.needed_series(path)
     return FolderSummary(
         folder_count=len(listing.folders),
         dicom_count=len(images),
         annotation_count=len(annotations),
-        label=series_label((images or annotations)[0]) if files else "",
+        label=label,
+        series_uid=series_uid if images else "",
+        references=sorted(references),
     )
 
 
