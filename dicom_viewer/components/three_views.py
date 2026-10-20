@@ -149,10 +149,41 @@ def plane_view(plane: str) -> rx.Component:
         rx.cond(
             DicomViewerState.active_plane == plane,
             rx.el.div(
-                class_name="absolute inset-0 border border-blue-500/70 pointer-events-none"
+                class_name="hidden md:block absolute inset-0 border border-blue-500/70 pointer-events-none"
             ),
         ),
-        class_name="relative flex flex-col min-h-0 min-w-0 bg-black",
+        # Below md only the plane picked in plane_tabs() is shown.
+        class_name=rx.cond(
+            DicomViewerState.active_plane == plane,
+            "relative flex flex-col min-h-0 min-w-0 bg-black",
+            "relative hidden md:flex flex-col min-h-0 min-w-0 bg-black",
+        ),
+    )
+
+
+def plane_tabs() -> rx.Component:
+    """Too narrow for all three views: pick the one to show."""
+
+    def tab(plane: str) -> rx.Component:
+        title, color, description, _ = _PLANES[plane]
+        return rx.el.button(
+            rx.el.span(
+                class_name="h-2 w-2 rounded-full shrink-0",
+                style={"backgroundColor": color},
+            ),
+            title,
+            on_click=DicomViewerState.show_plane(plane),
+            title=description,
+            class_name=rx.cond(
+                DicomViewerState.active_plane == plane,
+                "flex-1 flex items-center justify-center gap-2 py-1.5 rounded-md bg-slate-700 text-slate-100 text-sm font-medium",
+                "flex-1 flex items-center justify-center gap-2 py-1.5 rounded-md text-slate-400 hover:text-slate-100 text-sm font-medium",
+            ),
+        )
+
+    return rx.el.div(
+        *(tab(plane) for plane in _PLANES),
+        class_name="md:hidden flex gap-1 p-1 bg-slate-900 border-b border-slate-800 shrink-0",
     )
 
 
@@ -165,13 +196,17 @@ def _info_row(label: str, value: rx.Var) -> rx.Component:
 
 
 def crosshair_panel() -> rx.Component:
+    # Below md it is a short strip under the one visible view.
     return rx.el.div(
         rx.el.h3(
             "Crosshair",
-            class_name="text-xs font-semibold text-slate-500 uppercase tracking-wider",
+            class_name="hidden md:block text-xs font-semibold text-slate-500 uppercase tracking-wider",
         ),
-        _info_row("Position", DicomViewerState.crosshair_position),
-        _info_row("Value", DicomViewerState.crosshair_value),
+        rx.el.div(
+            _info_row("Position", DicomViewerState.crosshair_position),
+            _info_row("Value", DicomViewerState.crosshair_value),
+            class_name="flex flex-wrap gap-x-6 gap-y-2 md:flex-col md:gap-4",
+        ),
         rx.el.label(
             rx.el.input(
                 type="checkbox",
@@ -194,9 +229,9 @@ def crosshair_panel() -> rx.Component:
             rx.el.li("Click a view to move the crosshair there."),
             rx.el.li("Scroll over a view, or use ↑ ↓, to move through its slices."),
             rx.el.li("The blue frame marks the view the keys move."),
-            class_name="text-xs text-slate-500 space-y-1 list-disc pl-4 mt-auto",
+            class_name="hidden md:block text-xs text-slate-500 space-y-1 list-disc pl-4 mt-auto",
         ),
-        class_name="flex flex-col gap-4 p-4 bg-slate-900 overflow-y-auto custom-scrollbar min-h-0",
+        class_name="flex flex-col gap-3 md:gap-4 p-3 md:p-4 bg-slate-900 overflow-y-auto custom-scrollbar min-h-0",
     )
 
 
@@ -247,11 +282,15 @@ def three_views() -> rx.Component:
         (
             "ready",
             rx.el.div(
-                plane_view("axial"),
-                plane_view("coronal"),
-                plane_view("sagittal"),
-                crosshair_panel(),
-                class_name="flex-1 min-h-0 grid grid-cols-2 grid-rows-2 gap-px bg-slate-800",
+                plane_tabs(),
+                rx.el.div(
+                    plane_view("axial"),
+                    plane_view("coronal"),
+                    plane_view("sagittal"),
+                    crosshair_panel(),
+                    class_name="flex-1 min-h-0 grid grid-cols-1 grid-rows-[minmax(0,1fr)_auto] md:grid-cols-2 md:grid-rows-2 gap-px bg-slate-800",
+                ),
+                class_name="flex-1 min-h-0 flex flex-col",
             ),
         ),
         ("error", _error()),

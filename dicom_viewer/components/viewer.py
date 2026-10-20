@@ -34,6 +34,87 @@ class SliceKeys(WindowEventListener):
     on_key_down: rx.EventHandler[_slice_key_spec]
 
 
+def side_panel(
+    side: str,
+    title: str,
+    docked_open: rx.Var[bool],
+    on_toggle: rx.EventHandler,
+    width: str,
+    *body: rx.Component,
+) -> rx.Component:
+    """A column beside the image (lg and up) or a drawer over it (narrower).
+
+    Folded on a wide screen it leaves a rail where it was, so the way back
+    is in the same place as the way out.
+    """
+    edge = "left" if side == "metadata" else "right"
+    icon_button = "p-1.5 rounded-md border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800 hover:border-slate-600 transition-colors"
+    buttons = rx.fragment(
+        rx.el.button(
+            rx.icon("x", class_name="h-4 w-4"),
+            on_click=DicomViewerState.set_drawer(""),
+            title="Close",
+            class_name=f"lg:hidden {icon_button}",
+        ),
+        rx.el.button(
+            rx.icon(f"panel-{edge}-close", class_name="h-4 w-4"),
+            on_click=on_toggle,
+            title=f"Hide {title.lower()}",
+            class_name=f"hidden lg:inline-flex {icon_button}",
+        ),
+    )
+    heading = rx.el.h2(title, class_name="text-sm font-semibold text-slate-100")
+    return rx.el.aside(
+        rx.el.button(
+            rx.icon(f"panel-{edge}-open", class_name="h-4 w-4 shrink-0"),
+            rx.el.span(title, style={"writingMode": "vertical-rl"}),
+            on_click=on_toggle,
+            title=f"Show {title.lower()}",
+            class_name=rx.cond(
+                docked_open,
+                "hidden",
+                "hidden lg:flex flex-1 flex-col items-center gap-3 py-4 text-xs font-semibold uppercase tracking-wider text-slate-400 hover:text-blue-300 hover:bg-slate-800/60 transition-colors",
+            ),
+        ),
+        rx.el.div(
+            # The buttons sit on the side facing the image.
+            rx.el.div(
+                *((heading, buttons) if edge == "left" else (buttons, heading)),
+                class_name="flex items-center gap-2 px-4 py-3 border-b border-slate-800 shrink-0"
+                + (" justify-between" if edge == "left" else ""),
+            ),
+            rx.el.div(*body, class_name="flex-1 min-h-0 overflow-y-auto custom-scrollbar"),
+            class_name=rx.cond(
+                docked_open,
+                "flex flex-col flex-1 min-h-0",
+                "flex flex-col flex-1 min-h-0 lg:hidden",
+            ),
+        ),
+        class_name=[
+            f"fixed inset-y-0 {edge}-0 z-50 w-[min(20rem,88vw)] flex flex-col shrink-0 "
+            f"bg-slate-900 border-slate-800 {'border-r' if edge == 'left' else 'border-l'} "
+            "shadow-2xl transition-[transform,visibility] duration-200 "
+            "lg:static lg:z-auto lg:shadow-none lg:transform-none lg:visible lg:transition-none",
+            rx.cond(
+                DicomViewerState.drawer == side,
+                "",
+                f"{'-translate-x-full' if edge == 'left' else 'translate-x-full'} invisible",
+            ),
+            rx.cond(docked_open, width, "lg:w-11"),
+        ],
+    )
+
+
+def drawer_backdrop() -> rx.Component:
+    return rx.cond(
+        DicomViewerState.drawer != "",
+        rx.el.div(
+            on_click=DicomViewerState.set_drawer(""),
+            class_name="fixed inset-0 z-40 bg-black/60 lg:hidden",
+        ),
+    )
+
+
 def control_section_header(title: str) -> rx.Component:
     return rx.el.h3(
         title,
@@ -80,7 +161,9 @@ def tutorial_dialog() -> rx.Component:
             class_name="bg-slate-950 rounded-xl border border-slate-800 p-4 w-[560px] max-w-[90vw]",
         ),
         open=DicomViewerState.tutorial_dialog_open,
-        class_name="backdrop:bg-black/60",
+        # Fixed in the middle of the screen, so it is not caught inside the
+        # Controls panel when that panel is a drawer.
+        class_name="fixed inset-0 m-auto z-[60] h-fit max-h-[90vh] overflow-auto p-0 bg-transparent border-0 shadow-2xl",
     )
 
 
@@ -136,18 +219,13 @@ def metadata_row(label: str, value: str, icon_name: str) -> rx.Component:
 
 def metadata_panel() -> rx.Component:
     """Left sidebar displaying DICOM metadata."""
-    return rx.cond(
+    return side_panel(
+        "metadata",
+        "Metadata",
         DicomViewerState.show_metadata,
+        DicomViewerState.toggle_metadata,
+        "lg:w-72",
         rx.el.div(
-            rx.el.div(
-                rx.el.h3("Metadata", class_name="text-sm font-semibold text-slate-100"),
-                rx.el.button(
-                    rx.icon("x", class_name="h-4 w-4 text-slate-400 hover:text-white"),
-                    on_click=DicomViewerState.toggle_metadata,
-                    class_name="p-1 rounded hover:bg-slate-800 transition-colors",
-                ),
-                class_name="flex items-center justify-between mb-6 pb-4 border-b border-slate-800",
-            ),
             rx.el.div(
                 control_section_header("Patient Info"),
                 metadata_row(
@@ -238,14 +316,19 @@ def metadata_panel() -> rx.Component:
                 metadata_row("Position", DicomViewerState.image_position, "crosshair"),
                 class_name="mb-6",
             ),
-            class_name="w-72 bg-slate-900 border-r border-slate-800 p-5 flex-shrink-0 overflow-y-auto custom-scrollbar transition-all duration-300 ease-in-out",
+            class_name="p-5",
         ),
     )
 
 
 def viewer_sidebar() -> rx.Component:
     """The controls sidebar."""
-    return rx.el.div(
+    return side_panel(
+        "controls",
+        "Controls",
+        DicomViewerState.show_controls,
+        DicomViewerState.toggle_controls,
+        "lg:w-80",
         rx.el.div(
             control_section_header("Zoom & Pan"),
             rx.el.div(
@@ -398,22 +481,21 @@ def viewer_sidebar() -> rx.Component:
             ),
             class_name="p-6 border-t border-slate-800",
         ),
-        tutorial_dialog(),
-        class_name="w-80 bg-slate-900 border-l border-slate-800 flex flex-col z-20 shadow-xl overflow-y-auto custom-scrollbar",
     )
 
 
 def view_mode_switch() -> rx.Component:
     def option(mode: str, icon: str, label: str, hint: str) -> rx.Component:
         return rx.el.button(
-            rx.icon(icon, class_name="h-4 w-4 mr-1.5"),
-            label,
+            rx.icon(icon, class_name="h-4 w-4 sm:mr-1.5"),
+            rx.el.span(label, class_name="hidden sm:inline"),
             on_click=DicomViewerState.set_view_mode(mode),
             title=hint,
+            aria_label=label,
             class_name=rx.cond(
                 DicomViewerState.view_mode == mode,
-                "flex items-center px-3 py-1 rounded-md bg-blue-600 text-white text-sm font-medium",
-                "flex items-center px-3 py-1 rounded-md text-slate-400 hover:text-slate-100 text-sm font-medium",
+                "flex items-center px-2 sm:px-3 py-1 rounded-md bg-blue-600 text-white text-sm font-medium",
+                "flex items-center px-2 sm:px-3 py-1 rounded-md text-slate-400 hover:text-slate-100 text-sm font-medium",
             ),
         )
 
@@ -429,14 +511,28 @@ def view_mode_switch() -> rx.Component:
     )
 
 
+def drawer_button(side: str, icon: str, label: str) -> rx.Component:
+    """Opens a side panel as a drawer; only below lg, where the panels fold away."""
+    return rx.el.button(
+        rx.icon(icon, class_name="h-4 w-4 md:mr-2"),
+        rx.el.span(label, class_name="hidden md:inline"),
+        on_click=DicomViewerState.set_drawer(side),
+        title=label,
+        aria_label=label,
+        class_name="lg:hidden flex items-center p-2 md:px-3 md:py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-medium transition-colors",
+    )
+
+
 def top_bar() -> rx.Component:
     return rx.el.div(
         rx.el.div(
             rx.el.button(
-                rx.icon("arrow-left", class_name="h-4 w-4 mr-2"),
-                "Back to folders",
+                rx.icon("arrow-left", class_name="h-4 w-4 sm:mr-2"),
+                rx.el.span("Back to folders", class_name="hidden sm:inline"),
                 on_click=rx.redirect("/"),
-                class_name="flex items-center px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors text-sm font-medium shrink-0",
+                title="Back to folders",
+                aria_label="Back to folders",
+                class_name="flex items-center p-2 sm:px-3 sm:py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors text-sm font-medium shrink-0",
             ),
             rx.cond(
                 DicomViewerState.total_images > 0,
@@ -454,23 +550,17 @@ def top_bar() -> rx.Component:
                         title=DicomViewerState.series_path,
                         class_name="font-mono text-xs text-slate-400 truncate",
                     ),
-                    class_name="min-w-0 border-l border-slate-700 pl-4",
+                    class_name="min-w-0 border-l border-slate-700 pl-3 sm:pl-4",
                 ),
             ),
-            class_name="flex items-center gap-4 min-w-0",
+            class_name="flex items-center gap-3 sm:gap-4 min-w-0",
         ),
         rx.cond(
             DicomViewerState.total_images > 0,
             rx.el.div(
                 view_mode_switch(),
-                rx.el.button(
-                    rx.icon("info", class_name="h-4 w-4 mr-2"),
-                    rx.cond(
-                        DicomViewerState.show_metadata, "Hide Info", "Show Info"
-                    ),
-                    on_click=DicomViewerState.toggle_metadata,
-                    class_name="flex items-center text-slate-400 hover:text-blue-400 transition-colors text-sm font-medium",
-                ),
+                drawer_button("metadata", "info", "Metadata"),
+                drawer_button("controls", "sliders-horizontal", "Controls"),
                 rx.cond(
                     DicomViewerState.view_mode == "single",
                     rx.el.div(
@@ -480,13 +570,13 @@ def top_bar() -> rx.Component:
                             class_name="font-mono text-sm text-slate-300",
                         ),
                         title="Slice / slices in this series",
-                        class_name="flex items-center bg-slate-800 px-3 py-1.5 rounded-full border border-slate-700",
+                        class_name="hidden lg:flex items-center bg-slate-800 px-3 py-1.5 rounded-full border border-slate-700",
                     ),
                 ),
-                class_name="flex items-center gap-6 shrink-0",
+                class_name="flex items-center gap-2 sm:gap-3 lg:gap-6 shrink-0",
             ),
         ),
-        class_name="bg-slate-900 border-b border-slate-800 px-4 py-3 flex justify-between items-center gap-4 z-10 shrink-0",
+        class_name="bg-slate-900 border-b border-slate-800 px-2 sm:px-4 py-2 sm:py-3 flex justify-between items-center gap-2 sm:gap-4 z-10 shrink-0",
     )
 
 
@@ -590,9 +680,11 @@ def viewer_layout() -> rx.Component:
                     class_name="flex flex-col flex-1 min-w-0",
                 ),
                 viewer_sidebar(),
+                drawer_backdrop(),
                 class_name="flex flex-1 overflow-hidden min-h-0",
             ),
             empty_viewer(),
         ),
+        tutorial_dialog(),
         class_name="flex flex-col h-screen w-screen bg-slate-950 text-slate-100 font-['Inter'] overflow-hidden",
     )

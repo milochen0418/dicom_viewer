@@ -78,7 +78,12 @@ class DicomViewerState(rx.State):
     slice_thickness: str = "N/A"
     rows: int = 0
     columns: int = 0
+    # Side panels: from the lg breakpoint up they sit beside the image and
+    # fold into a rail; below it they are drawers over the image, all closed
+    # until `drawer` names one ("metadata" or "controls").
     show_metadata: bool = True
+    show_controls: bool = True
+    drawer: str = ""
     metadata_unlocked: bool = False
     metadata_password_input: str = ""
     metadata_password_error: str = ""
@@ -597,6 +602,14 @@ class DicomViewerState(rx.State):
         self.show_metadata = not self.show_metadata
 
     @rx.event
+    def toggle_controls(self):
+        self.show_controls = not self.show_controls
+
+    @rx.event
+    def set_drawer(self, side: str):
+        self.drawer = side if side in ("metadata", "controls") else ""
+
+    @rx.event
     def update_metadata_password(self, value: str):
         self.metadata_password_input = value
         if self.metadata_password_error:
@@ -700,6 +713,9 @@ class DicomViewerState(rx.State):
     @rx.event
     def handle_slice_key(self, key: str):
         """Arrow and Page keys step through the slices; Home/End jump to the ends."""
+        if key == "Escape":
+            self.drawer = ""
+            return None
         if self.view_mode == "mpr":
             plane = self.active_plane
             index = self.plane_index.get(plane, 0)
@@ -922,6 +938,12 @@ class DicomViewerState(rx.State):
         if delta_y and plane in self.plane_index:
             step = 1 if delta_y > 0 else -1
             return self._move_plane(plane, self.plane_index[plane] + step)
+
+    @rx.event
+    def show_plane(self, plane: str):
+        """Narrow screens show one plane at a time: this picks it."""
+        if plane in self.plane_index:
+            self.active_plane = plane
 
     @rx.event
     def set_plane_index(self, plane: str, value: str):
