@@ -11,6 +11,7 @@ This project is designed to be beginner-friendly for people new to DICOM, and th
 We maintain a Software Design Document (SDD) to capture the overall architecture and key design decisions:
 
 - [DICOM Viewer — Software Design Document (SDD).pdf](docs/DICOM%20Viewer%20%E2%80%94%20Software%20Design%20Document%20%28SDD%29.pdf)
+- [Annotation display interface](docs/annotations_interface.md): how SEG, SR, RTSTRUCT and GSPS annotations reach the screen through one interface, and how to write an adapter for a new format.
 
 Contributions are welcome—feel free to open an issue with feedback/ideas, or submit a PR to improve the app or the documentation.
 
@@ -62,6 +63,24 @@ The viewer provides image browsing and common presets for different visualizatio
 Hover over a preset button to see its tooltip and learn what each preset does.
 
 
+### 8) Annotations
+
+![Annotations](docs/images/annotations.png)
+
+Annotation objects stored beside the images are drawn on them and listed in
+the Annotations section of the controls sidebar:
+
+- **SEG** (DICOM Segmentation): one colour per segment, in 1 view and 3 views.
+- **RTSTRUCT** (RT Structure Set): ROI outlines in 1 view, filled in 3 views.
+- **SR** (TID 1500 measurement reports): measured regions with their values.
+- **PR** (Softcopy Presentation States): graphics and text, in 1 view.
+
+Put the annotation files in the series folder or in a folder beside it (the
+one-series-per-folder layout data portals produce). Each layer and each
+segment or ROI can be switched off, and the opacity is adjustable. The folder
+page shows how many annotations a folder holds. The interface behind this is
+described in [docs/annotations_interface.md](docs/annotations_interface.md).
+
 ## Getting Started
 
 This project is managed with [Poetry](https://python-poetry.org/).
@@ -96,3 +115,11 @@ poetry run ./reflex_rerun.sh
 ```
 
 The application will be available at `http://localhost:3000`.
+
+### Running the Tests
+
+Unit tests live under `tests/` and run without starting the app:
+
+```bash
+poetry run pytest
+```

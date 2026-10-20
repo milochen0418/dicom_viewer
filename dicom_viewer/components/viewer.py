@@ -321,6 +321,152 @@ def metadata_panel() -> rx.Component:
     )
 
 
+def annotation_item(layer: rx.Var, item: rx.Var) -> rx.Component:
+    """One segment, ROI, graphic layer or finding, with its checkbox and colour."""
+    return rx.el.label(
+        rx.el.input(
+            type="checkbox",
+            checked=item.visible,
+            on_change=lambda _value: DicomViewerState.toggle_item(layer.id, item.id),
+            class_name="accent-blue-500 shrink-0",
+        ),
+        rx.el.span(
+            class_name="h-2.5 w-2.5 rounded-full shrink-0 border border-black/40",
+            style={"backgroundColor": item.color},
+        ),
+        rx.el.span(item.name, title=item.name, class_name="text-sm text-slate-200 truncate"),
+        rx.cond(
+            item.description != "",
+            rx.el.span(
+                item.description,
+                class_name="text-[11px] text-slate-500 truncate ml-auto shrink-0 max-w-[40%]",
+            ),
+        ),
+        class_name="flex items-center gap-2 pl-6 py-0.5 cursor-pointer select-none",
+    )
+
+
+def annotation_layer(layer: rx.Var) -> rx.Component:
+    """One annotation object: its format badge, name, items and notes."""
+    return rx.el.div(
+        rx.el.label(
+            rx.el.input(
+                type="checkbox",
+                checked=layer.visible,
+                on_change=lambda _value: DicomViewerState.toggle_layer(layer.id),
+                class_name="accent-blue-500 shrink-0",
+            ),
+            rx.el.span(
+                layer.format,
+                class_name="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-800 text-blue-300 shrink-0",
+            ),
+            rx.el.span(layer.name, title=layer.name, class_name="text-sm text-slate-100 truncate"),
+            rx.cond(
+                (DicomViewerState.view_mode == "mpr") & ~layer.volume_ok,
+                rx.el.span(
+                    "1 view only",
+                    title="This kind of annotation is drawn on the scanned images only.",
+                    class_name="text-[10px] text-amber-300 ml-auto shrink-0",
+                ),
+            ),
+            class_name="flex items-center gap-2 cursor-pointer select-none",
+        ),
+        rx.foreach(layer.rows, lambda item: annotation_item(layer, item)),
+        rx.foreach(
+            layer.notes,
+            lambda note: rx.el.p(
+                rx.icon("info", class_name="h-3.5 w-3.5 mr-1.5 mt-0.5 shrink-0"),
+                note,
+                class_name="flex text-xs text-amber-300/90 bg-amber-900/20 border border-amber-900/40 rounded-lg p-2 mt-1 ml-6",
+            ),
+        ),
+        class_name="mb-3",
+    )
+
+
+def annotations_panel() -> rx.Component:
+    """The annotation layers found beside the series: SEG, RTSTRUCT, SR, PR."""
+    return rx.el.div(
+        rx.el.div(
+            control_section_header("Annotations"),
+            rx.el.button(
+                rx.icon("refresh-cw", class_name="h-3.5 w-3.5"),
+                on_click=DicomViewerState.rescan_layers,
+                disabled=DicomViewerState.layers_status == "loading",
+                title="Look again for annotation files beside this series",
+                class_name="p-1 mb-4 rounded text-slate-500 hover:text-slate-200 hover:bg-slate-800 disabled:opacity-40",
+            ),
+            class_name="flex items-center justify-between",
+        ),
+        rx.match(
+            DicomViewerState.layers_status,
+            (
+                "loading",
+                rx.el.p(
+                    rx.icon("loader-circle", class_name="h-3.5 w-3.5 mr-1.5 animate-spin"),
+                    "Looking for annotations…",
+                    class_name="flex items-center text-xs text-slate-500",
+                ),
+            ),
+            (
+                "ready",
+                rx.cond(
+                    DicomViewerState.layers.length() > 0,
+                    rx.fragment(
+                        rx.el.div(
+                            rx.el.div(
+                                rx.el.label(
+                                    "Opacity", class_name="text-xs font-medium text-slate-300"
+                                ),
+                                rx.el.span(
+                                    f"{DicomViewerState.annotation_opacity}%",
+                                    class_name="text-xs text-blue-400 font-mono",
+                                ),
+                                class_name="flex justify-between mb-2",
+                            ),
+                            rx.el.input(
+                                type="range",
+                                min="0",
+                                max="100",
+                                key=DicomViewerState.annotation_slider_key,
+                                default_value=DicomViewerState.annotation_opacity,
+                                on_change=DicomViewerState.set_annotation_opacity,
+                                class_name="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer hover:bg-slate-600 transition-colors accent-blue-500",
+                            ),
+                            class_name="mb-3",
+                        ),
+                        rx.el.label(
+                            rx.el.input(
+                                type="checkbox",
+                                checked=DicomViewerState.show_annotation_labels,
+                                on_change=DicomViewerState.toggle_annotation_labels,
+                                class_name="accent-blue-500",
+                            ),
+                            "Show measurement text",
+                            class_name="flex items-center gap-2 text-sm text-slate-300 cursor-pointer select-none mb-4",
+                        ),
+                        rx.foreach(DicomViewerState.layers, annotation_layer),
+                    ),
+                    rx.el.p(
+                        "No annotations were found beside this series.",
+                        class_name="text-xs text-slate-500",
+                    ),
+                ),
+            ),
+            rx.fragment(),
+        ),
+        rx.foreach(
+            DicomViewerState.layer_errors,
+            lambda error: rx.el.p(
+                rx.icon("triangle-alert", class_name="h-3.5 w-3.5 mr-1.5 mt-0.5 shrink-0"),
+                error,
+                class_name="flex text-xs text-red-400 bg-red-900/20 border border-red-900/50 rounded-lg p-2 mt-2 break-all",
+            ),
+        ),
+        class_name="p-6 border-t border-slate-800",
+    )
+
+
 def viewer_sidebar() -> rx.Component:
     """The controls sidebar."""
     return side_panel(
@@ -481,6 +627,7 @@ def viewer_sidebar() -> rx.Component:
             ),
             class_name="p-6 border-t border-slate-800",
         ),
+        annotations_panel(),
     )
 
 

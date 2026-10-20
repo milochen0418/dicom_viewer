@@ -75,6 +75,7 @@ Optional environment variables (see `testcases/README.md`):
 
 - Prefer the smallest, focused change set.
 - After code changes, run the closest relevant check (at minimum the related suite via `run_test_suite.sh`).
+- Unit tests live under `tests/` and need no running app: `poetry run pytest` (pytest is in the Poetry `dev` group).
 - Report outcomes: what you ran, pass/fail, and where artifacts/logs were written.
 
 ## 6) Smart way to help the Agent to debug

@@ -133,6 +133,17 @@ def here_card() -> rx.Component:
                 rx.el.p(
                     _plural(FolderBrowserState.here_dicom_count, "image", "images"),
                     rx.cond(
+                        FolderBrowserState.here_annotation_count > 0,
+                        rx.fragment(
+                            " · ",
+                            _plural(
+                                FolderBrowserState.here_annotation_count,
+                                "annotation",
+                                "annotations",
+                            ),
+                        ),
+                    ),
+                    rx.cond(
                         FolderBrowserState.here_label != "",
                         rx.fragment(" · ", FolderBrowserState.here_label),
                     ),
@@ -158,6 +169,13 @@ def entry_details(entry: FolderEntry) -> rx.Component:
                     entry.dicom_count > 0,
                     rx.fragment(
                         _plural(entry.dicom_count, "image", "images"),
+                        rx.cond(
+                            entry.annotation_count > 0,
+                            rx.fragment(
+                                " · ",
+                                _plural(entry.annotation_count, "annotation", "annotations"),
+                            ),
+                        ),
                         # The title shows the series label, so name the folder here.
                         rx.cond(entry.label != "", rx.fragment(" · ", entry.name)),
                         rx.cond(
@@ -168,9 +186,18 @@ def entry_details(entry: FolderEntry) -> rx.Component:
                         ),
                     ),
                     rx.cond(
-                        entry.folder_count > 0,
-                        _plural(entry.folder_count, "folder", "folders"),
-                        "No DICOM images",
+                        entry.annotation_count > 0,
+                        # Annotations of images kept elsewhere: open those images to see them.
+                        rx.fragment(
+                            _plural(entry.annotation_count, "annotation", "annotations"),
+                            rx.cond(entry.label != "", rx.fragment(" · ", entry.label)),
+                            " · shown with the images they belong to",
+                        ),
+                        rx.cond(
+                            entry.folder_count > 0,
+                            _plural(entry.folder_count, "folder", "folders"),
+                            "No DICOM images",
+                        ),
                     ),
                 ),
             ),

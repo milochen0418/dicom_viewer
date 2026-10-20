@@ -1,10 +1,13 @@
 import reflex as rx
 import asyncio
+import collections
+import dataclasses
 import os
 import logging
 import numpy as np
 
-from dicom_viewer import folders, series, volume
+from dicom_viewer import annotations, folders, series, volume
+import dicom_viewer.annotations.builtin  # noqa: F401 - registers the SEG, SR, RTSTRUCT and PR adapters
 
 # Used when the files suggest no window of their own.
 DEFAULT_WINDOW = (40.0, 400.0)
@@ -23,15 +26,185 @@ _SLICE_KEY_STEPS = {
 }
 
 
+@dataclasses.dataclass
+class ItemView:
+    """One toggleable thing of an annotation layer, as the panel shows it."""
+
+    id: str = ""
+    name: str = ""
+    color: str = ""  # CSS colour
+    description: str = ""
+    visible: bool = True
+
+
+@dataclasses.dataclass
+class LayerView:
+    """One annotation object (SEG, RTSTRUCT, SR, PR) found beside the open series."""
+
+    id: str = ""
+    format: str = ""
+    name: str = ""
+    notes: list[str] = dataclasses.field(default_factory=list)
+    volume_ok: bool = False  # can be shown in 3 views
+    visible: bool = True
+    rows: list[ItemView] = dataclasses.field(default_factory=list)
+
+
+@dataclasses.dataclass(frozen=True)
+class Drawing:
+    """How the panel wants annotations drawn, as the renderers take it."""
+
+    visible: dict[str, list[str]]  # layer id -> item ids to show; [] hides the layer
+    opacity: float
+    labels: bool
+    version: int
+
+
+@dataclasses.dataclass
+class _Loaded:
+    """The annotation files seen for a series: per file its layer (None when it
+    is not for this series) and load error, plus the layers in folder order."""
+
+    by_path: dict[str, tuple] = dataclasses.field(default_factory=dict)
+    layers: list = dataclasses.field(default_factory=list)
+
+
+# Loaded layers per series and label volumes per (volume, layer). They hold
+# numpy arrays, so they live here; the state keeps only ids and visibility.
+# The folders are scanned again every time a series opens, so annotations
+# downloaded later show up; only the objects already read are reused.
+_LAYER_CACHE_SIZE = 3
+_LABEL_CACHE_SIZE = 8
+_layer_cache: collections.OrderedDict[str, _Loaded] = collections.OrderedDict()
+_label_cache: collections.OrderedDict[tuple[str, str], np.ndarray | None] = (
+    collections.OrderedDict()
+)
+
+
+def _cached_layers(key: str) -> _Loaded | None:
+    entry = _layer_cache.get(key)
+    if entry is not None:
+        _layer_cache.move_to_end(key)
+    return entry
+
+
+def _layers_of(key: str) -> list:
+    entry = _cached_layers(key) if key else None
+    return entry.layers if entry else []
+
+
+def _store_layers(key: str, entry: _Loaded) -> None:
+    _layer_cache[key] = entry
+    _layer_cache.move_to_end(key)
+    while len(_layer_cache) > _LAYER_CACHE_SIZE:
+        _layer_cache.popitem(last=False)
+
+
+def _store_labels(key: tuple[str, str], labels: np.ndarray | None) -> None:
+    _label_cache[key] = labels
+    _label_cache.move_to_end(key)
+    while len(_label_cache) > _LABEL_CACHE_SIZE:
+        _label_cache.popitem(last=False)
+
+
+def _layer_view(layer) -> LayerView:
+    return LayerView(
+        id=layer.id,
+        format=layer.format,
+        name=layer.name,
+        notes=list(layer.notes),
+        volume_ok=bool(layer.supports_volume),
+        rows=[
+            ItemView(
+                id=item.id,
+                name=item.name,
+                color="rgb(%d, %d, %d)" % tuple(item.color),
+                description=item.description,
+            )
+            for item in layer.items
+        ],
+    )
+
+
+def _render_slice(pixels, slope, intercept, center, width, ref, layers, drawing) -> str:
+    """The windowed slice with the visible annotations on it, as a PNG data URL."""
+    try:
+        image = series.render_image(pixels, slope, intercept, center, width)
+    except Exception as e:
+        logging.exception(f"Error processing image: {e}")
+        return "/placeholder.svg"
+    if ref is not None and layers:
+        try:
+            image = annotations.render(
+                image,
+                ref,
+                layers,
+                visible=drawing.visible,
+                opacity=drawing.opacity,
+                show_labels=drawing.labels,
+            )
+        except Exception as e:
+            logging.exception(f"Error drawing annotations: {e}")
+    return series.encode_png(image)
+
+
+def _labels_for(layer, stack, vol: volume.Volume) -> np.ndarray | None:
+    """A layer's label volume turned like `vol`, or None when it cannot be shown."""
+    try:
+        labels = layer.label_volume(stack)
+    except Exception as e:
+        logging.exception(f"Error building the labels of {layer.name}: {e}")
+        return None
+    return None if labels is None else volume.reorient(labels, vol)
+
+
+def _plane_overlays(key: str, layers, drawing) -> list[tuple]:
+    """(layer, labels, hidden item ids) for the visible layers that have labels."""
+    overlays = []
+    for layer in layers:
+        shown = drawing.visible.get(layer.id)
+        if shown is None:
+            shown = [item.id for item in layer.items]
+        labels = _label_cache.get((key, layer.id)) if shown else None
+        if labels is None:
+            continue
+        hidden = {item.id for item in layer.items} - set(shown)
+        overlays.append((layer, labels, hidden))
+    return overlays
+
+
 def _render_planes(
-    vol: volume.Volume, indices: dict[str, int], center: float, width: float
+    vol: volume.Volume,
+    indices: dict[str, int],
+    center: float,
+    width: float,
+    overlays: list[tuple] = (),
+    opacity: float = 0.4,
 ) -> dict[str, str]:
-    return {
-        plane: series.render_png(
-            vol.plane(plane, index), vol.slope, vol.intercept, center, width
-        )
-        for plane, index in indices.items()
-    }
+    pictures = {}
+    for plane, index in indices.items():
+        try:
+            image = series.render_image(
+                vol.plane(plane, index), vol.slope, vol.intercept, center, width
+            )
+        except Exception as e:
+            logging.exception(f"Error processing the {plane} view: {e}")
+            pictures[plane] = "/placeholder.svg"
+            continue
+        for layer, labels, hidden in overlays:
+            try:
+                cut = volume.cut(labels, plane, index)
+                image = annotations.compose(
+                    image,
+                    annotations.overlay_from_labels(cut, layer.items),
+                    layer.items,
+                    opacity=opacity,
+                    hidden=hidden,
+                )
+            except Exception as e:
+                logging.exception(f"Error drawing {layer.name} on the {plane} view: {e}")
+        pictures[plane] = series.encode_png(image)
+    return pictures
 
 
 class DicomViewerState(rx.State):
@@ -117,6 +290,19 @@ class DicomViewerState(rx.State):
     # (volume, slice, window) each plane picture was drawn for.
     _plane_drawn: dict[str, tuple] = {}
     _mpr_refreshing: bool = False
+    # Annotation objects (SEG, RTSTRUCT, SR, PR) found beside the series:
+    # what the panel lists, and what the user switched off.
+    layers: list[LayerView] = []
+    layer_errors: list[str] = []
+    layers_status: str = ""  # "", "loading" or "ready"
+    annotation_opacity: int = 40  # percent
+    show_annotation_labels: bool = True
+    annotation_slider_key: int = 0
+    _layers_key: str = ""
+    # Bumped whenever visibility or opacity changes, so the pictures redraw.
+    _layers_version: int = 0
+    # Where each file of _series_files is, for the annotation layers.
+    _series_refs: list = []
     _default_tutorial_links: dict[str, str] = {
         # Use same-origin static assets so the tutorial can be embedded in an iframe.
         # (Many external sites, including Wikipedia, block iframe embedding.)
@@ -433,13 +619,13 @@ class DicomViewerState(rx.State):
                     self.open_error = "This folder is outside the DICOM folder."
                 return
             try:
-                files = await asyncio.to_thread(folders.dicom_files, folder)
+                files = await asyncio.to_thread(folders.image_files, folder)
                 async with self:
                     self.opening_total = len(files)
                 keyed = []
                 for start in range(0, len(files), _OPEN_BATCH):
                     batch = files[start : start + _OPEN_BATCH]
-                    keyed += await asyncio.to_thread(series.read_sort_keys, batch)
+                    keyed += await asyncio.to_thread(series.read_slices, batch)
                     async with self:
                         self.opening_done = start + len(batch)
             except OSError as e:
@@ -452,12 +638,15 @@ class DicomViewerState(rx.State):
                     self.open_error = "No readable DICOM images in this folder."
                 return
             keyed.sort(key=lambda item: item[0])
-            ordered = [path for _, path in keyed]
+            ordered = [path for _, path, _ in keyed]
+            refs = [ref for _, _, ref in keyed]
             window = await asyncio.to_thread(series.file_window, ordered[0])
             label = await asyncio.to_thread(folders.series_label, ordered[0])
             async with self:
                 self._series_version += 1
+                version = self._series_version
                 self._series_files = ordered
+                self._series_refs = refs
                 self._series_window = window or DEFAULT_WINDOW
                 self._series_window_preset = FILE_WINDOW if window else ""
                 self.series_path = folder
@@ -480,10 +669,18 @@ class DicomViewerState(rx.State):
                 self.mpr_status = ""
                 self.mpr_error = ""
                 self._volume_key = ""
+                self.layers = []
+                self.layer_errors = []
+                self.layers_status = ""
+                self._layers_key = ""
                 self._set_window(*self._series_window, self._series_window_preset)
             # Show the first slice before switching pages.
             await self._refresh()
             yield rx.redirect("/viewer")
+            async with self:
+                self.opening = False
+            # The annotations beside the series come after the pictures.
+            await self._load_layers(folder, version)
         finally:
             async with self:
                 self.opening = False
@@ -525,6 +722,9 @@ class DicomViewerState(rx.State):
                     pixels = self._cached_pixel_array
                     slope = self._cached_rescale_slope
                     intercept = self._cached_rescale_intercept
+                    ref = self._series_refs[index] if index < len(self._series_refs) else None
+                    layers = _layers_of(self._layers_key)
+                    drawing = self._drawing()
                 ds = None
                 if not cached:
                     try:
@@ -545,7 +745,7 @@ class DicomViewerState(rx.State):
                                     return
                         continue
                 image = await asyncio.to_thread(
-                    series.render_png, pixels, slope, intercept, center, width
+                    _render_slice, pixels, slope, intercept, center, width, ref, layers, drawing
                 )
                 async with self:
                     if self._series_version != version:
@@ -558,11 +758,12 @@ class DicomViewerState(rx.State):
                         self._extract_metadata(ds)
                         self.error_message = ""
                     self.current_image_base64 = image
-                    if (self.current_index, self.window_center, self.window_width) == (
-                        index,
-                        center,
-                        width,
-                    ):
+                    if (
+                        self.current_index,
+                        self.window_center,
+                        self.window_width,
+                        self._layers_version,
+                    ) == (index, center, width, drawing.version):
                         self._refreshing = False
                         done = True
                         return
@@ -850,6 +1051,7 @@ class DicomViewerState(rx.State):
             self.plane_slider_key += 1
             self._update_crosshair_info(vol)
             self.mpr_status = "ready"
+        await self._load_labels(key, vol, version)
         await self._refresh_planes()
 
     async def _refresh_planes(self):
@@ -864,8 +1066,10 @@ class DicomViewerState(rx.State):
                 async with self:
                     key = self._volume_key
                     window = (self.window_center, self.window_width)
+                    drawing = self._drawing()
+                    layers = _layers_of(self._layers_key)
                     wanted = {
-                        plane: (key, self.plane_index[plane], *window)
+                        plane: (key, self.plane_index[plane], *window, drawing.version)
                         for plane in volume.PLANES
                     }
                     stale = [
@@ -884,8 +1088,14 @@ class DicomViewerState(rx.State):
                         self._mpr_refreshing = False
                         done = missing = True
                         break
+                overlays = _plane_overlays(key, layers, drawing)
                 images = await asyncio.to_thread(
-                    _render_planes, vol, {p: wanted[p][1] for p in stale}, *window
+                    _render_planes,
+                    vol,
+                    {p: wanted[p][1] for p in stale},
+                    *window,
+                    overlays,
+                    drawing.opacity,
                 )
                 async with self:
                     if self._volume_key != key:
@@ -901,6 +1111,151 @@ class DicomViewerState(rx.State):
                     self._mpr_refreshing = False
         if missing:
             await self._load_volume(rebuild=True)
+
+    async def _load_layers(self, folder: str, version: int):
+        """Find the annotation objects for the open series and list them in the panel."""
+        async with self:
+            if self._series_version != version:
+                return
+            files = list(self._series_files)
+            refs = list(self._series_refs)
+            self.layers_status = "loading"
+        key = volume.cache_key(files)
+        entry = _cached_layers(key) or _Loaded()
+        errors: list[tuple[str, str]] = []
+        try:
+            paths = await asyncio.to_thread(annotations.find_layer_files, folder)
+        except Exception as e:
+            logging.exception(f"Error looking for annotations in {folder}: {e}")
+            paths = list(entry.by_path)
+            errors.append((folder, str(e)))
+        new = [path for path in paths if path not in entry.by_path]
+        if new:
+            failures: list[tuple[str, str]] = []
+            try:
+                info = annotations.series_info(refs)
+                loaded = await asyncio.to_thread(annotations.load_layers, info, new, failures)
+            except Exception as e:
+                logging.exception(f"Error reading the annotations in {folder}: {e}")
+                loaded = []
+                errors.append((folder, str(e)))
+            by_path = {layer.source_path: layer for layer in loaded}
+            failed = dict(failures)
+            for path in new:
+                entry.by_path[path] = (by_path.get(path), failed.get(path, ""))
+        found = [entry.by_path[path] for path in paths if path in entry.by_path]
+        entry.layers = [layer for layer, _ in found if layer is not None]
+        errors += [(path, entry.by_path[path][1]) for path in paths
+                   if path in entry.by_path and entry.by_path[path][1]]
+        _store_layers(key, entry)
+        layers = entry.layers
+        async with self:
+            if self._series_version != version:
+                return
+            self._layers_key = key
+            self.layers = [_layer_view(layer) for layer in layers]
+            self.layer_errors = [
+                f"{os.path.basename(path)}: {message}" for path, message in errors
+            ]
+            self.layers_status = "ready"
+            self._layers_version += 1
+            self.annotation_slider_key += 1
+            mode, volume_key, mpr_status = self.view_mode, self._volume_key, self.mpr_status
+        if not layers:
+            return
+        if mode == "mpr" and mpr_status == "ready":
+            vol = volume.cached(volume_key)
+            if vol is not None:
+                await self._load_labels(volume_key, vol, version)
+            await self._refresh_planes()
+        elif mode == "single":
+            await self._refresh()
+
+    @rx.event(background=True)
+    async def rescan_layers(self):
+        """Look again for annotation files beside the series, e.g. after downloading one."""
+        async with self:
+            folder, version = self.series_path, self._series_version
+            if not folder or self.layers_status == "loading":
+                return
+        await self._load_layers(folder, version)
+
+    async def _load_labels(self, key: str, vol: volume.Volume, version: int):
+        """Build the label volumes of the layers that 3 views can show (kept per volume)."""
+        async with self:
+            if self._series_version != version:
+                return
+            layers = _layers_of(self._layers_key)
+            refs_by_path = dict(zip(self._series_files, self._series_refs))
+        stack = [refs_by_path.get(path) for path in vol.layout.paths]
+        if not layers or any(ref is None for ref in stack):
+            return
+        for layer in layers:
+            if not layer.supports_volume or (key, layer.id) in _label_cache:
+                continue
+            labels = await asyncio.to_thread(_labels_for, layer, stack, vol)
+            _store_labels((key, layer.id), labels)
+
+    def _drawing(self) -> Drawing:
+        """What the panel asks for, as the renderers take it."""
+        visible = {
+            layer.id: ([item.id for item in layer.rows if item.visible] if layer.visible else [])
+            for layer in self.layers
+        }
+        return Drawing(
+            visible,
+            self.annotation_opacity / 100.0,
+            self.show_annotation_labels,
+            self._layers_version,
+        )
+
+    def _set_layers(self, layer_id: str, visible: bool | None = None, item_id: str = ""):
+        """Copy the layer views with one layer, or one of its items, switched."""
+        updated = []
+        for layer in self.layers:
+            if layer.id == layer_id:
+                rows = [
+                    ItemView(item.id, item.name, item.color, item.description,
+                             (not item.visible) if item.id == item_id else item.visible)
+                    for item in layer.rows
+                ]
+                layer = LayerView(
+                    layer.id, layer.format, layer.name, list(layer.notes), layer.volume_ok,
+                    layer.visible if visible is None else visible, rows,
+                )
+            updated.append(layer)
+        self.layers = updated
+        self._layers_version += 1
+
+    @rx.event
+    def toggle_layer(self, layer_id: str):
+        current = next((layer.visible for layer in self.layers if layer.id == layer_id), None)
+        if current is None:
+            return None
+        self._set_layers(layer_id, visible=not current)
+        return DicomViewerState.refresh_image
+
+    @rx.event
+    def toggle_item(self, layer_id: str, item_id: str):
+        self._set_layers(layer_id, item_id=item_id)
+        return DicomViewerState.refresh_image
+
+    @rx.event
+    def set_annotation_opacity(self, value: str):
+        try:
+            percent = int(float(value))
+        except ValueError as e:
+            logging.exception(f"Error setting the annotation opacity: {e}")
+            return None
+        self.annotation_opacity = max(0, min(100, percent))
+        self._layers_version += 1
+        return DicomViewerState.refresh_image
+
+    @rx.event
+    def toggle_annotation_labels(self):
+        self.show_annotation_labels = not self.show_annotation_labels
+        self._layers_version += 1
+        return DicomViewerState.refresh_image
 
     def _update_crosshair_info(self, vol: volume.Volume | None = None):
         vol = vol or volume.cached(self._volume_key)

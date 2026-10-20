@@ -94,6 +94,31 @@ def dicom_files(path: str, listing: Listing | None = None) -> list[str]:
     return [candidate for candidate in candidates if is_dicom_file(candidate)]
 
 
+def annotation_files(files: list[str]) -> list[str]:
+    """The files among `files` that hold annotations (SEG, RTSTRUCT, SR, PR, ...).
+
+    Cheap: only when the first file is an annotation are the others checked,
+    which fits the one-series-per-folder layout; a flat folder mixing images
+    and annotations is split by `image_files` instead.
+    """
+    from dicom_viewer.annotations import builtin, registry  # noqa: F401 - registers the adapters
+
+    if not files or not registry.is_annotation_file(files[0]):
+        return []
+    return [path for path in files if registry.is_annotation_file(path)]
+
+
+def image_files(path: str, listing: Listing | None = None) -> list[str]:
+    """The DICOM images directly inside `path`: every file no annotation adapter claims."""
+    from dicom_viewer.annotations import builtin, registry  # noqa: F401 - registers the adapters
+
+    return [
+        candidate
+        for candidate in dicom_files(path, listing)
+        if not registry.is_annotation_file(candidate)
+    ]
+
+
 def series_label(file_path: str) -> str:
     """Short description of a file's series, e.g. "CT · CHEST 1.25MM"."""
     try:
@@ -115,13 +140,14 @@ def series_label(file_path: str) -> str:
 @dataclasses.dataclass
 class FolderSummary:
     folder_count: int = 0
-    dicom_count: int = 0
+    dicom_count: int = 0  # images
+    annotation_count: int = 0
     label: str = ""
     error: str = ""
 
 
 def summarize_folder(path: str, listing: Listing | None = None) -> FolderSummary:
-    """Counts of subfolders and DICOM files, plus a label for the DICOM series."""
+    """Counts of subfolders, images and annotations, plus a label for the series."""
     try:
         listing = listing or list_folder(path)
         files = dicom_files(path, listing)
@@ -129,10 +155,13 @@ def summarize_folder(path: str, listing: Listing | None = None) -> FolderSummary
         return FolderSummary(error="No permission to open this folder")
     except OSError as error:
         return FolderSummary(error=f"Cannot open: {error.strerror or error}")
+    annotations = annotation_files(files)
+    images = [path for path in files if path not in set(annotations)]
     return FolderSummary(
         folder_count=len(listing.folders),
-        dicom_count=len(files),
-        label=series_label(files[0]) if files else "",
+        dicom_count=len(images),
+        annotation_count=len(annotations),
+        label=series_label((images or annotations)[0]) if files else "",
     )
 
 

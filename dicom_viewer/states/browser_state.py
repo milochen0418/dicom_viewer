@@ -23,7 +23,8 @@ class FolderEntry:
     path: str = ""
     checked: bool = False  # the fields below are filled in
     folder_count: int = 0
-    dicom_count: int = 0
+    dicom_count: int = 0  # images
+    annotation_count: int = 0
     label: str = ""
     error: str = ""
 
@@ -53,6 +54,7 @@ def _rows(
                     checked=True,
                     folder_count=summary.folder_count,
                     dicom_count=summary.dicom_count,
+                    annotation_count=summary.annotation_count,
                     label=summary.label,
                     error=summary.error,
                 )
@@ -68,6 +70,7 @@ class FolderBrowserState(rx.State):
     crumbs: list[Crumb] = []
     entries: list[FolderEntry] = []
     here_dicom_count: int = 0
+    here_annotation_count: int = 0
     here_label: str = ""
     loading: bool = False
     checking: bool = False
@@ -148,6 +151,7 @@ class FolderBrowserState(rx.State):
             self.path = target
             self.crumbs = self._crumbs(target)
             self.here_dicom_count = 0
+            self.here_annotation_count = 0
             self.here_label = ""
             self.loading = True
             self.error = ""
@@ -167,6 +171,7 @@ class FolderBrowserState(rx.State):
                 return
             self.entries = _rows(target, listing.folders, {})
             self.here_dicom_count = here.dicom_count
+            self.here_annotation_count = here.annotation_count
             self.here_label = here.label
             self.loading = False
             self.checking = bool(listing.folders)

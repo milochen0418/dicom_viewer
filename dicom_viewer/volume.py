@@ -111,11 +111,7 @@ class Volume:
 
     def plane(self, plane: str, index: int) -> np.ndarray:
         """One slice of a plane, oriented for display (rows top to bottom)."""
-        if plane == "axial":
-            return self.data[index, :, :]
-        if plane == "coronal":
-            return self.data[::-1, index, :]
-        return self.data[::-1, :, index]
+        return cut(self.data, plane, index)
 
     def value(self, z: int, y: int, x: int) -> float:
         return float(self.data[z, y, x]) * self.slope + self.intercept
@@ -149,6 +145,31 @@ class Volume:
         """The file of the scanned slice the cursor is on."""
         zyx = (cursor["axial"], cursor["coronal"], cursor["sagittal"])
         return self.layout.paths[self._stack_index(zyx)[0]]
+
+
+def cut(data: np.ndarray, plane: str, index: int) -> np.ndarray:
+    """One slice of a plane of a [z, y, x] array, oriented for display (rows top to bottom)."""
+    if plane == "axial":
+        return data[index, :, :]
+    if plane == "coronal":
+        return data[::-1, index, :]
+    return data[::-1, :, index]
+
+
+def _turn(stack: np.ndarray, order: tuple[int, int, int], flipped: tuple[bool, bool, bool]) -> np.ndarray:
+    data = stack.transpose(order)
+    for axis, backwards in enumerate(flipped):
+        if backwards:
+            data = np.flip(data, axis=axis)
+    return data
+
+
+def reorient(array: np.ndarray, vol: Volume) -> np.ndarray:
+    """`array`, stacked like the series (slice, row, column), turned like `vol.data`.
+
+    For label volumes of the series' annotations, so they cut like its pixels.
+    """
+    return _turn(array, vol.order, vol.flipped)
 
 
 def cache_key(paths: list[str]) -> str:
@@ -306,13 +327,10 @@ def assemble(layout: Layout, slices: list[tuple[np.ndarray, float, float]]) -> V
         itertools.permutations(range(3)),
         key=lambda p: sum(weight[p[i], patient_component[i]] for i in range(3)),
     )
-    data = stack.transpose(order)
-    flipped = []
-    for axis in range(3):
-        backwards = bool(layout.axes[order[axis], patient_component[axis]] < 0)
-        if backwards:
-            data = np.flip(data, axis=axis)
-        flipped.append(backwards)
+    flipped = tuple(
+        bool(layout.axes[order[axis], patient_component[axis]] < 0) for axis in range(3)
+    )
+    data = _turn(stack, order, flipped)
     alignment = min(weight[order[i], patient_component[i]] for i in range(3))
     tilt = math.degrees(math.acos(min(1.0, float(alignment))))
     return Volume(

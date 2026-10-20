@@ -15,11 +15,21 @@ import pydicom
 from PIL import Image
 from pydicom.multival import MultiValue
 
-# Ordering needs only these tags; skipping the rest keeps opening fast.
+from dicom_viewer.annotations import geometry
+from dicom_viewer.annotations.model import SliceRef
+
+# Ordering and placing the slices needs only these tags; skipping the rest
+# keeps opening fast.
 _ORDER_TAGS = [
+    "SOPInstanceUID",
+    "StudyInstanceUID",
     "SeriesInstanceUID",
+    "FrameOfReferenceUID",
     "ImagePositionPatient",
     "ImageOrientationPatient",
+    "PixelSpacing",
+    "Rows",
+    "Columns",
     "SliceLocation",
     "InstanceNumber",
 ]
@@ -72,17 +82,26 @@ def sort_key(ds, file_path: str) -> tuple:
     return (series_uid, primary, secondary, os.path.basename(file_path).lower())
 
 
-def read_sort_keys(paths: list[str]) -> list[tuple[tuple, str]]:
-    """(sort key, path) for each readable file; unreadable files are skipped."""
-    keyed = []
+def read_slices(paths: list[str]) -> list[tuple[tuple, str, SliceRef]]:
+    """(sort key, path, where the slice is) for each readable file; unreadable files are skipped.
+
+    The SliceRef is what the annotation layers are asked about when the
+    slice is shown.
+    """
+    found = []
     for path in paths:
         try:
             ds = pydicom.dcmread(path, stop_before_pixels=True, specific_tags=_ORDER_TAGS)
         except Exception as error:
             logging.warning("Skipping invalid DICOM file %s: %s", path, error)
             continue
-        keyed.append((sort_key(ds, path), path))
-    return keyed
+        found.append((sort_key(ds, path), path, geometry.slice_ref(ds)))
+    return found
+
+
+def read_sort_keys(paths: list[str]) -> list[tuple[tuple, str]]:
+    """(sort key, path) for each readable file; unreadable files are skipped."""
+    return [(key, path) for key, path, _ in read_slices(paths)]
 
 
 def file_window(path: str) -> tuple[float, float] | None:
@@ -112,45 +131,57 @@ def read_slice(path: str):
     return ds, pixels, slope, intercept
 
 
+def render_image(
+    pixels: np.ndarray, slope: float, intercept: float, center: float, width: float
+) -> Image.Image:
+    """Apply windowing and return the picture: "L" for grayscale, "RGB" for colour."""
+    pixel_data = pixels
+    is_rgb = pixel_data.ndim == 3 and pixel_data.shape[-1] in (3, 4)
+    if pixel_data.ndim >= 3 and not is_rgb:
+        try:
+            pixel_data = pixel_data.reshape((-1,) + pixel_data.shape[-2:])[0]
+        except Exception:
+            pixel_data = pixel_data[0]
+    if is_rgb:
+        rgb = pixel_data.astype(float)
+        rgb = np.clip(rgb, np.min(rgb), np.max(rgb))
+        if np.max(rgb) != np.min(rgb):
+            rgb = (rgb - np.min(rgb)) / (np.max(rgb) - np.min(rgb)) * 255.0
+        img_uint8 = rgb.astype(np.uint8)
+        pil_image = Image.fromarray(img_uint8)
+        if pil_image.mode not in ("RGB", "RGBA"):
+            pil_image = pil_image.convert("RGB")
+        return pil_image
+    pixel_data = pixel_data.astype(float)
+    hu_image = pixel_data * slope + intercept
+    min_val = center - width / 2
+    max_val = center + width / 2
+    windowed = np.clip(hu_image, min_val, max_val)
+    if max_val != min_val:
+        windowed = (windowed - min_val) / (max_val - min_val) * 255.0
+    else:
+        windowed = windowed * 0
+    img_uint8 = windowed.astype(np.uint8)
+    pil_image = Image.fromarray(img_uint8)
+    if pil_image.mode != "L":
+        pil_image = pil_image.convert("L")
+    return pil_image
+
+
+def encode_png(image: Image.Image) -> str:
+    """A picture as a PNG data URL, what the page's <img> takes."""
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    b64_string = base64.b64encode(buffer.getvalue()).decode()
+    return f"data:image/png;base64,{b64_string}"
+
+
 def render_png(
     pixels: np.ndarray, slope: float, intercept: float, center: float, width: float
 ) -> str:
     """Apply windowing and return the image as a PNG data URL."""
     try:
-        pixel_data = pixels
-        is_rgb = pixel_data.ndim == 3 and pixel_data.shape[-1] in (3, 4)
-        if pixel_data.ndim >= 3 and not is_rgb:
-            try:
-                pixel_data = pixel_data.reshape((-1,) + pixel_data.shape[-2:])[0]
-            except Exception:
-                pixel_data = pixel_data[0]
-        if is_rgb:
-            rgb = pixel_data.astype(float)
-            rgb = np.clip(rgb, np.min(rgb), np.max(rgb))
-            if np.max(rgb) != np.min(rgb):
-                rgb = (rgb - np.min(rgb)) / (np.max(rgb) - np.min(rgb)) * 255.0
-            img_uint8 = rgb.astype(np.uint8)
-            pil_image = Image.fromarray(img_uint8)
-            if pil_image.mode not in ("RGB", "RGBA"):
-                pil_image = pil_image.convert("RGB")
-        else:
-            pixel_data = pixel_data.astype(float)
-            hu_image = pixel_data * slope + intercept
-            min_val = center - width / 2
-            max_val = center + width / 2
-            windowed = np.clip(hu_image, min_val, max_val)
-            if max_val != min_val:
-                windowed = (windowed - min_val) / (max_val - min_val) * 255.0
-            else:
-                windowed = windowed * 0
-            img_uint8 = windowed.astype(np.uint8)
-            pil_image = Image.fromarray(img_uint8)
-            if pil_image.mode != "L":
-                pil_image = pil_image.convert("L")
-        buffer = io.BytesIO()
-        pil_image.save(buffer, format="PNG")
-        b64_string = base64.b64encode(buffer.getvalue()).decode()
-        return f"data:image/png;base64,{b64_string}"
+        return encode_png(render_image(pixels, slope, intercept, center, width))
     except Exception as e:
         logging.exception(f"Error processing image: {e}")
         return "/placeholder.svg"
