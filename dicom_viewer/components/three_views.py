@@ -2,7 +2,9 @@
 
 import reflex as rx
 
+from dicom_viewer.components.together import actor_badge, slider_key
 from dicom_viewer.states.dicom_state import DicomViewerState
+from dicom_viewer.states.room import SeriesRoom
 from dicom_viewer.volume import SCREEN_AXES
 
 # Name, colour, what it shows, and the patient side at each edge
@@ -58,7 +60,7 @@ class PlaneArea(rx.el.Div):
 
 def _line(plane: str, vertical: bool) -> rx.Component:
     """Where another plane crosses this picture."""
-    place = f"{DicomViewerState.crosshair[plane]}%"
+    place = f"{SeriesRoom.crosshair[plane]}%"
     return rx.el.div(
         class_name=(
             "absolute top-0 bottom-0 w-px pointer-events-none"
@@ -86,7 +88,7 @@ def _edge_label(text: str, position: str) -> rx.Component:
 def plane_view(plane: str) -> rx.Component:
     title, color, description, (top, bottom, left, right) = _PLANES[plane]
     horizontal, vertical = SCREEN_AXES[plane]
-    ratio = DicomViewerState.plane_ratio[plane]
+    ratio = SeriesRoom.plane_ratio[plane]
     return rx.el.div(
         rx.el.div(
             rx.el.span(
@@ -101,15 +103,15 @@ def plane_view(plane: str) -> rx.Component:
             rx.el.input(
                 type="range",
                 min="0",
-                max=DicomViewerState.plane_count[plane] - 1,
-                key=DicomViewerState.plane_slider_key,
-                default_value=DicomViewerState.plane_index[plane],
+                max=SeriesRoom.plane_count[plane] - 1,
+                key=slider_key("plane"),
+                default_value=SeriesRoom.plane_index[plane],
                 on_change=lambda value: DicomViewerState.set_plane_index(plane, value),
                 title=f"{title} slice",
                 class_name="flex-1 min-w-0 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500",
             ),
             rx.el.span(
-                DicomViewerState.plane_position_text[plane],
+                SeriesRoom.plane_position_text[plane],
                 class_name="font-mono text-xs text-slate-400 w-20 text-right shrink-0",
             ),
             class_name="flex items-center gap-2 px-3 py-1.5 bg-slate-900 shrink-0",
@@ -117,12 +119,12 @@ def plane_view(plane: str) -> rx.Component:
         PlaneArea.create(
             PlaneArea.create(
                 rx.image(
-                    src=getattr(DicomViewerState, f"{plane}_image"),
+                    src=getattr(SeriesRoom, f"{plane}_image"),
                     alt=f"{title} view",
                     class_name="w-full h-full pointer-events-none select-none",
                 ),
                 rx.cond(
-                    DicomViewerState.show_crosshair,
+                    SeriesRoom.show_crosshair,
                     rx.fragment(_line(horizontal, True), _line(vertical, False)),
                 ),
                 custom_attrs={"data-plane": plane},
@@ -131,7 +133,7 @@ def plane_view(plane: str) -> rx.Component:
                 style={
                     "width": f"min(100cqw, calc(100cqh * {ratio}))",
                     "aspectRatio": ratio,
-                    "transform": f"translate({DicomViewerState.pan_x}px, {DicomViewerState.pan_y}px) scale({DicomViewerState.zoom_level})",
+                    "transform": f"translate({SeriesRoom.pan_x}px, {SeriesRoom.pan_y}px) scale({SeriesRoom.zoom_level})",
                     "transition": "transform 0.1s ease-out",
                 },
                 class_name="relative shrink-0 cursor-crosshair",
@@ -140,6 +142,7 @@ def plane_view(plane: str) -> rx.Component:
             _edge_label(bottom, "bottom-1 left-1/2 -translate-x-1/2"),
             _edge_label(left, "left-1.5 top-1/2 -translate-y-1/2"),
             _edge_label(right, "right-1.5 top-1/2 -translate-y-1/2"),
+            actor_badge(plane),
             custom_attrs={"data-plane": plane},
             on_wheel=DicomViewerState.scroll_plane.throttle(60),
             style={"containerType": "size"},
@@ -147,14 +150,14 @@ def plane_view(plane: str) -> rx.Component:
         ),
         # Outline drawn above the picture marks the plane the keys move.
         rx.cond(
-            DicomViewerState.active_plane == plane,
+            SeriesRoom.active_plane == plane,
             rx.el.div(
                 class_name="hidden md:block absolute inset-0 border border-blue-500/70 pointer-events-none"
             ),
         ),
         # Below md only the plane picked in plane_tabs() is shown.
         class_name=rx.cond(
-            DicomViewerState.active_plane == plane,
+            SeriesRoom.active_plane == plane,
             "relative flex flex-col min-h-0 min-w-0 bg-black",
             "relative hidden md:flex flex-col min-h-0 min-w-0 bg-black",
         ),
@@ -175,7 +178,7 @@ def plane_tabs() -> rx.Component:
             on_click=DicomViewerState.show_plane(plane),
             title=description,
             class_name=rx.cond(
-                DicomViewerState.active_plane == plane,
+                SeriesRoom.active_plane == plane,
                 "flex-1 flex items-center justify-center gap-2 py-1.5 rounded-md bg-slate-700 text-slate-100 text-sm font-medium",
                 "flex-1 flex items-center justify-center gap-2 py-1.5 rounded-md text-slate-400 hover:text-slate-100 text-sm font-medium",
             ),
@@ -203,14 +206,14 @@ def crosshair_panel() -> rx.Component:
             class_name="hidden md:block text-xs font-semibold text-slate-500 uppercase tracking-wider",
         ),
         rx.el.div(
-            _info_row("Position", DicomViewerState.crosshair_position),
-            _info_row("Value", DicomViewerState.crosshair_value),
+            _info_row("Position", SeriesRoom.crosshair_position),
+            _info_row("Value", SeriesRoom.crosshair_value),
             class_name="flex flex-wrap gap-x-6 gap-y-2 md:flex-col md:gap-4",
         ),
         rx.el.label(
             rx.el.input(
                 type="checkbox",
-                checked=DicomViewerState.show_crosshair,
+                checked=SeriesRoom.show_crosshair,
                 on_change=DicomViewerState.toggle_crosshair,
                 class_name="accent-blue-500",
             ),
@@ -218,7 +221,7 @@ def crosshair_panel() -> rx.Component:
             class_name="flex items-center gap-2 text-sm text-slate-300 cursor-pointer select-none",
         ),
         rx.foreach(
-            DicomViewerState.mpr_notes,
+            SeriesRoom.mpr_notes,
             lambda note: rx.el.p(
                 rx.icon("info", class_name="h-3.5 w-3.5 mr-1.5 mt-0.5 shrink-0"),
                 note,
@@ -242,14 +245,14 @@ def _loading() -> rx.Component:
         rx.el.div(
             rx.el.div(
                 class_name="h-full bg-blue-500 transition-all",
-                style={"width": f"{DicomViewerState.mpr_percent}%"},
+                style={"width": f"{SeriesRoom.mpr_percent}%"},
             ),
             class_name="w-64 h-1.5 bg-slate-800 rounded-full overflow-hidden mt-4",
         ),
         rx.el.p(
             rx.cond(
-                DicomViewerState.mpr_total > 0,
-                f"Reading image {DicomViewerState.mpr_done} of {DicomViewerState.mpr_total}",
+                SeriesRoom.mpr_total > 0,
+                f"Reading image {SeriesRoom.mpr_done} of {SeriesRoom.mpr_total}",
                 "Reading the image positions",
             ),
             class_name="text-xs text-slate-500 mt-2 font-mono",
@@ -263,7 +266,7 @@ def _error() -> rx.Component:
         rx.icon("triangle-alert", class_name="h-8 w-8 text-amber-400 mb-4"),
         rx.el.p("3 views are not available", class_name="text-slate-200 font-medium"),
         rx.el.p(
-            DicomViewerState.mpr_error,
+            SeriesRoom.mpr_error,
             class_name="text-sm text-slate-400 mt-2 max-w-md text-center",
         ),
         rx.el.button(
@@ -278,7 +281,7 @@ def _error() -> rx.Component:
 
 def three_views() -> rx.Component:
     return rx.match(
-        DicomViewerState.mpr_status,
+        SeriesRoom.mpr_status,
         (
             "ready",
             rx.el.div(

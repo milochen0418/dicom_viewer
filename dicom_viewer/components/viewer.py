@@ -1,8 +1,18 @@
 import reflex as rx
 from reflex_components_core.core.window_events import WindowEventListener
 
+from dicom_viewer.components.call_views import call_button, incoming_call
 from dicom_viewer.components.three_views import three_views
+from dicom_viewer.components.together import (
+    actor_badge,
+    identity,
+    page_hooks,
+    presence,
+    share_button,
+    slider_key,
+)
 from dicom_viewer.states.dicom_state import AUTO, PRESET_GROUPS, DicomViewerState
+from dicom_viewer.states.room import SeriesRoom
 
 
 def _wheel_spec(e: rx.Var) -> tuple[rx.Var[float]]:
@@ -188,19 +198,19 @@ def zoom_pan_section() -> rx.Component:
                     rx.el.button(
                         rx.icon("minus", class_name="h-4 w-4"),
                         on_click=DicomViewerState.zoom_out,
-                        disabled=DicomViewerState.zoom_level <= 0.25,
+                        disabled=SeriesRoom.zoom_level <= 0.25,
                         title="Zoom out",
                         aria_label="Zoom out",
                         class_name=f"{square} rounded-md shrink-0",
                     ),
                     rx.el.span(
-                        f"{(DicomViewerState.zoom_level * 100).to_string()}%",
+                        f"{(SeriesRoom.zoom_level * 100).to_string()}%",
                         class_name="flex-1 min-w-0 h-8 flex items-center justify-center text-sm font-mono text-blue-400 bg-slate-900/50 border border-slate-800 rounded-md",
                     ),
                     rx.el.button(
                         rx.icon("plus", class_name="h-4 w-4"),
                         on_click=DicomViewerState.zoom_in,
-                        disabled=DicomViewerState.zoom_level >= 4.0,
+                        disabled=SeriesRoom.zoom_level >= 4.0,
                         title="Zoom in",
                         aria_label="Zoom in",
                         class_name=f"{square} rounded-md shrink-0",
@@ -243,7 +253,7 @@ def windowing_section() -> rx.Component:
     phone), and the line under it says what the window in use is for, in the
     language chosen beside the heading.
     """
-    preset = DicomViewerState.selected_preset
+    preset = SeriesRoom.selected_preset
     is_auto = preset == AUTO
     is_preset = (preset != "") & (preset != AUTO)
     box = "h-9 text-sm rounded-lg border transition-colors"
@@ -315,7 +325,7 @@ def windowing_section() -> rx.Component:
         ),
         rx.el.div(
             rx.el.p(
-                DicomViewerState.window_description,
+                SeriesRoom.window_descriptions[DicomViewerState.tooltip_language],
                 class_name="text-xs text-slate-400 leading-relaxed",
             ),
             rx.el.button(
@@ -334,7 +344,7 @@ def windowing_section() -> rx.Component:
                     class_name="text-xs font-medium text-slate-300",
                 ),
                 rx.el.span(
-                    DicomViewerState.window_center.to_string(),
+                    SeriesRoom.window_center.to_string(),
                     class_name="text-xs text-blue-400 font-mono",
                 ),
                 class_name="flex justify-between mb-2",
@@ -343,8 +353,8 @@ def windowing_section() -> rx.Component:
                 type="range",
                 min="-1000",
                 max="3000",
-                key=DicomViewerState.window_slider_key,
-                default_value=DicomViewerState.window_center,
+                key=slider_key("window"),
+                default_value=SeriesRoom.window_center,
                 on_change=DicomViewerState.update_window_center,
                 class_name="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer hover:bg-slate-600 transition-colors accent-blue-500",
             ),
@@ -354,7 +364,7 @@ def windowing_section() -> rx.Component:
             rx.el.div(
                 rx.el.label("Width", class_name="text-xs font-medium text-slate-300"),
                 rx.el.span(
-                    DicomViewerState.window_width.to_string(),
+                    SeriesRoom.window_width.to_string(),
                     class_name="text-xs text-blue-400 font-mono",
                 ),
                 class_name="flex justify-between mb-2",
@@ -363,8 +373,8 @@ def windowing_section() -> rx.Component:
                 type="range",
                 min="1",
                 max="4000",
-                key=DicomViewerState.window_slider_key,
-                default_value=DicomViewerState.window_width,
+                key=slider_key("window"),
+                default_value=SeriesRoom.window_width,
                 on_change=DicomViewerState.update_window_width,
                 class_name="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer hover:bg-slate-600 transition-colors accent-blue-500",
             ),
@@ -401,7 +411,7 @@ def metadata_panel() -> rx.Component:
                     "Name",
                     rx.cond(
                         DicomViewerState.metadata_unlocked,
-                        DicomViewerState.patient_name,
+                        SeriesRoom.patient_name,
                         "Hidden",
                     ),
                     "user",
@@ -410,7 +420,7 @@ def metadata_panel() -> rx.Component:
                     "ID",
                     rx.cond(
                         DicomViewerState.metadata_unlocked,
-                        DicomViewerState.patient_id,
+                        SeriesRoom.patient_id,
                         "Hidden",
                     ),
                     "id-card",
@@ -461,28 +471,28 @@ def metadata_panel() -> rx.Component:
                     "Date",
                     rx.cond(
                         DicomViewerState.metadata_unlocked,
-                        DicomViewerState.study_date,
+                        SeriesRoom.study_date,
                         "Hidden",
                     ),
                     "calendar",
                 ),
-                metadata_row("Modality", DicomViewerState.modality, "scan"),
-                metadata_row("Study", DicomViewerState.study_description, "file-text"),
-                metadata_row("Series", DicomViewerState.series_description, "layers"),
+                metadata_row("Modality", SeriesRoom.modality, "scan"),
+                metadata_row("Study", SeriesRoom.study_description, "file-text"),
+                metadata_row("Series", SeriesRoom.series_description, "layers"),
                 class_name="mb-6",
             ),
             rx.el.div(
                 control_section_header("Image Data"),
                 metadata_row(
                     "Resolution",
-                    f"{DicomViewerState.columns} x {DicomViewerState.rows}",
+                    f"{SeriesRoom.columns} x {SeriesRoom.rows}",
                     "maximize",
                 ),
-                metadata_row("Spacing", DicomViewerState.pixel_spacing, "ruler"),
+                metadata_row("Spacing", SeriesRoom.pixel_spacing, "ruler"),
                 metadata_row(
-                    "Thickness", DicomViewerState.slice_thickness, "align-justify"
+                    "Thickness", SeriesRoom.slice_thickness, "align-justify"
                 ),
-                metadata_row("Position", DicomViewerState.image_position, "crosshair"),
+                metadata_row("Position", SeriesRoom.image_position, "crosshair"),
                 class_name="mb-6",
             ),
             class_name="p-5",
@@ -531,7 +541,7 @@ def annotation_layer(layer: rx.Var) -> rx.Component:
             ),
             rx.el.span(layer.name, title=layer.name, class_name="text-sm text-slate-100 truncate"),
             rx.cond(
-                (DicomViewerState.view_mode == "mpr") & ~layer.volume_ok,
+                (SeriesRoom.view_mode == "mpr") & ~layer.volume_ok,
                 rx.el.span(
                     "1 view only",
                     title="This kind of annotation is drawn on the scanned images only.",
@@ -561,14 +571,14 @@ def annotations_panel() -> rx.Component:
             rx.el.button(
                 rx.icon("refresh-cw", class_name="h-3.5 w-3.5"),
                 on_click=DicomViewerState.rescan_layers,
-                disabled=DicomViewerState.layers_status == "loading",
+                disabled=SeriesRoom.layers_status == "loading",
                 title="Look again for annotation files beside this series",
                 class_name="p-1 mb-4 rounded text-slate-500 hover:text-slate-200 hover:bg-slate-800 disabled:opacity-40",
             ),
             class_name="flex items-center justify-between",
         ),
         rx.match(
-            DicomViewerState.layers_status,
+            SeriesRoom.layers_status,
             (
                 "loading",
                 rx.el.p(
@@ -580,7 +590,7 @@ def annotations_panel() -> rx.Component:
             (
                 "ready",
                 rx.cond(
-                    DicomViewerState.layers.length() > 0,
+                    SeriesRoom.layers.length() > 0,
                     rx.fragment(
                         rx.el.div(
                             rx.el.div(
@@ -588,7 +598,7 @@ def annotations_panel() -> rx.Component:
                                     "Opacity", class_name="text-xs font-medium text-slate-300"
                                 ),
                                 rx.el.span(
-                                    f"{DicomViewerState.annotation_opacity}%",
+                                    f"{SeriesRoom.annotation_opacity}%",
                                     class_name="text-xs text-blue-400 font-mono",
                                 ),
                                 class_name="flex justify-between mb-2",
@@ -597,8 +607,8 @@ def annotations_panel() -> rx.Component:
                                 type="range",
                                 min="0",
                                 max="100",
-                                key=DicomViewerState.annotation_slider_key,
-                                default_value=DicomViewerState.annotation_opacity,
+                                key=slider_key("opacity"),
+                                default_value=SeriesRoom.annotation_opacity,
                                 on_change=DicomViewerState.set_annotation_opacity,
                                 class_name="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer hover:bg-slate-600 transition-colors accent-blue-500",
                             ),
@@ -607,14 +617,14 @@ def annotations_panel() -> rx.Component:
                         rx.el.label(
                             rx.el.input(
                                 type="checkbox",
-                                checked=DicomViewerState.show_annotation_labels,
+                                checked=SeriesRoom.show_annotation_labels,
                                 on_change=DicomViewerState.toggle_annotation_labels,
                                 class_name="accent-blue-500",
                             ),
                             "Show measurement text",
                             class_name="flex items-center gap-2 text-sm text-slate-300 cursor-pointer select-none mb-4",
                         ),
-                        rx.foreach(DicomViewerState.layers, annotation_layer),
+                        rx.foreach(SeriesRoom.layers, annotation_layer),
                     ),
                     rx.el.p(
                         "No annotations were found beside this series.",
@@ -625,7 +635,7 @@ def annotations_panel() -> rx.Component:
             rx.fragment(),
         ),
         rx.foreach(
-            DicomViewerState.layer_errors,
+            SeriesRoom.layer_errors,
             lambda error: rx.el.p(
                 rx.icon("triangle-alert", class_name="h-3.5 w-3.5 mr-1.5 mt-0.5 shrink-0"),
                 error,
@@ -659,7 +669,7 @@ def view_mode_switch() -> rx.Component:
             title=hint,
             aria_label=label,
             class_name=rx.cond(
-                DicomViewerState.view_mode == mode,
+                SeriesRoom.view_mode == mode,
                 "flex items-center px-2 sm:px-3 py-1 rounded-md bg-blue-600 text-white text-sm font-medium",
                 "flex items-center px-2 sm:px-3 py-1 rounded-md text-slate-400 hover:text-slate-100 text-sm font-medium",
             ),
@@ -701,38 +711,38 @@ def top_bar() -> rx.Component:
                 class_name="flex items-center p-2 sm:px-3 sm:py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors text-sm font-medium shrink-0",
             ),
             rx.cond(
-                DicomViewerState.total_images > 0,
+                SeriesRoom.total_images > 0,
                 rx.el.div(
                     rx.el.p(
                         rx.cond(
-                            DicomViewerState.series_label != "",
-                            DicomViewerState.series_label,
-                            DicomViewerState.series_name,
+                            SeriesRoom.series_label != "",
+                            SeriesRoom.series_label,
+                            SeriesRoom.series_name,
                         ),
                         class_name="text-sm font-medium text-slate-100 truncate",
                     ),
                     rx.el.p(
-                        DicomViewerState.series_name,
-                        title=DicomViewerState.series_path,
+                        SeriesRoom.series_name,
+                        title=SeriesRoom.series_path,
                         class_name="font-mono text-xs text-slate-400 truncate",
                     ),
                     class_name="min-w-0 border-l border-slate-700 pl-3 sm:pl-4",
                 ),
             ),
-            class_name="flex items-center gap-3 sm:gap-4 min-w-0",
+            class_name="flex flex-1 items-center gap-3 sm:gap-4 min-w-0",
         ),
         rx.cond(
-            DicomViewerState.total_images > 0,
+            SeriesRoom.total_images > 0,
             rx.el.div(
                 view_mode_switch(),
                 drawer_button("metadata", "info", "Metadata"),
                 drawer_button("controls", "sliders-horizontal", "Controls"),
                 rx.cond(
-                    DicomViewerState.view_mode == "single",
+                    SeriesRoom.view_mode == "single",
                     rx.el.div(
                         rx.icon("layers", class_name="h-4 w-4 mr-2 text-blue-400"),
                         rx.el.span(
-                            DicomViewerState.current_position_text,
+                            SeriesRoom.current_position_text,
                             class_name="font-mono text-sm text-slate-300",
                         ),
                         title="Slice / slices in this series",
@@ -742,7 +752,23 @@ def top_bar() -> rx.Component:
                 class_name="flex items-center gap-2 sm:gap-3 lg:gap-6 shrink-0",
             ),
         ),
-        class_name="bg-slate-900 border-b border-slate-800 px-2 sm:px-4 py-2 sm:py-3 flex justify-between items-center gap-2 sm:gap-4 z-10 shrink-0",
+        rx.cond(DicomViewerState.series != "", people_bar()),
+        class_name="bg-slate-900 border-b border-slate-800 px-2 sm:px-4 py-2 sm:py-3 flex flex-wrap justify-between items-center gap-2 sm:gap-4 z-10 shrink-0",
+    )
+
+
+def people_bar() -> rx.Component:
+    """Who is here, the call and the link (as in ReflexGrid's title bar). Narrower than lg
+    it is a second row of the top bar."""
+    return rx.el.div(
+        presence(),
+        rx.el.div(
+            call_button(),
+            share_button(),
+            rx.el.div(identity(), class_name="hidden xl:flex items-center pl-3 border-l border-slate-700"),
+            class_name="flex items-center gap-2 shrink-0",
+        ),
+        class_name="order-last lg:order-none basis-full lg:basis-auto flex items-center justify-between lg:justify-end gap-2 sm:gap-3 lg:pl-4 lg:border-l lg:border-slate-700",
     )
 
 
@@ -753,29 +779,30 @@ def slice_bar() -> rx.Component:
         rx.el.button(
             rx.icon("chevron-left", class_name="h-5 w-5"),
             on_click=DicomViewerState.prev_image,
-            disabled=DicomViewerState.current_index == 0,
+            disabled=SeriesRoom.current_index == 0,
             title="Previous slice (↑)",
             class_name=step_button,
         ),
         rx.el.input(
             type="range",
             min="0",
-            max=DicomViewerState.slider_max,
-            key=DicomViewerState.slice_slider_key,
-            default_value=DicomViewerState.current_index,
+            max=SeriesRoom.slider_max,
+            key=slider_key("slice"),
+            default_value=SeriesRoom.current_index,
             on_change=DicomViewerState.set_slice_index,
+            id="slice-slider",
             class_name="flex-1 min-w-0 h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500",
         ),
         rx.el.button(
             rx.icon("chevron-right", class_name="h-5 w-5"),
             on_click=DicomViewerState.next_image,
-            disabled=DicomViewerState.current_index
-            == DicomViewerState.total_images - 1,
+            disabled=SeriesRoom.current_index
+            == SeriesRoom.total_images - 1,
             title="Next slice (↓)",
             class_name=step_button,
         ),
         rx.el.span(
-            DicomViewerState.current_position_text,
+            SeriesRoom.current_position_text,
             class_name="font-mono text-sm text-slate-300 w-20 text-right shrink-0",
         ),
         rx.el.span(
@@ -787,70 +814,125 @@ def slice_bar() -> rx.Component:
     )
 
 
-def empty_viewer() -> rx.Component:
+def message_screen(icon: str, title: str, text, id: str) -> rx.Component:
     return rx.el.div(
-        rx.icon("images", class_name="h-12 w-12 text-slate-600 mb-4"),
-        rx.el.p("No images are open", class_name="text-lg text-slate-200 font-medium"),
-        rx.el.p(
-            "Choose a folder with DICOM images first.",
-            class_name="text-sm text-slate-500 mt-1",
-        ),
+        rx.icon(icon, class_name="h-12 w-12 text-slate-600 mb-4"),
+        rx.el.p(title, class_name="text-lg text-slate-200 font-medium"),
+        rx.el.p(text, class_name="text-sm text-slate-500 mt-1 max-w-md"),
         rx.el.button(
             rx.icon("folder-open", class_name="h-4 w-4 mr-2"),
-            "Choose a folder",
+            "Back to folders",
             on_click=rx.redirect("/"),
             class_name="mt-6 flex items-center px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium",
         ),
-        class_name="flex-1 flex flex-col items-center justify-center text-center",
+        id=id,
+        class_name="flex-1 flex flex-col items-center justify-center text-center p-6",
+    )
+
+
+def opening_screen() -> rx.Component:
+    """The series is being read (for everyone on it)."""
+    return rx.el.div(
+        rx.el.div(
+            rx.el.div(
+                rx.el.div(
+                    class_name="animate-spin rounded-full h-5 w-5 border-2 border-slate-600 border-t-blue-400"
+                ),
+                rx.el.span("Opening images…", class_name="font-medium text-slate-100"),
+                class_name="flex items-center gap-3",
+            ),
+            rx.el.div(
+                rx.el.div(
+                    class_name="h-full bg-blue-500 transition-all",
+                    style={"width": f"{SeriesRoom.opening_percent}%"},
+                ),
+                class_name="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden mt-4",
+            ),
+            rx.el.p(
+                rx.cond(
+                    SeriesRoom.opening_total > 0,
+                    f"Reading {SeriesRoom.opening_done} of {SeriesRoom.opening_total} files",
+                    "Looking for DICOM files…",
+                ),
+                class_name="text-xs text-slate-400 mt-2 font-mono",
+            ),
+            class_name="w-80 bg-slate-900 border border-slate-700 rounded-xl p-5 shadow-2xl",
+        ),
+        id="opening",
+        class_name="flex-1 flex items-center justify-center",
+    )
+
+
+def viewer_body() -> rx.Component:
+    """The image and the panels."""
+    return rx.el.div(
+        metadata_panel(),
+        rx.el.div(
+            rx.cond(
+                SeriesRoom.view_mode == "mpr",
+                three_views(),
+                rx.fragment(
+                    WheelArea.create(
+                        rx.image(
+                            src=SeriesRoom.current_image_base64,
+                            style={
+                                "transform": f"translate({SeriesRoom.pan_x}px, {SeriesRoom.pan_y}px) scale({SeriesRoom.zoom_level})",
+                                "transition": "transform 0.1s ease-out",
+                            },
+                            class_name="max-h-full max-w-full object-contain pointer-events-none select-none",
+                            alt="DICOM Image",
+                        ),
+                        actor_badge(),
+                        on_wheel=DicomViewerState.scroll_slices.throttle(60),
+                        class_name="flex-1 min-h-0 bg-black relative flex items-center justify-center overflow-hidden w-full",
+                    ),
+                    slice_bar(),
+                ),
+            ),
+            class_name="flex flex-col flex-1 min-w-0",
+        ),
+        viewer_sidebar(),
+        drawer_backdrop(),
+        class_name="flex flex-1 overflow-hidden min-h-0",
     )
 
 
 def viewer_layout() -> rx.Component:
-    """The main viewer layout with image and controls."""
+    """A series at its own address, looked at together by everyone who opens it."""
     return rx.el.div(
         SliceKeys.create(on_key_down=DicomViewerState.handle_slice_key),
         top_bar(),
         rx.cond(
-            DicomViewerState.error_message != "",
+            SeriesRoom.error_message != "",
             rx.el.div(
                 rx.icon("triangle-alert", class_name="h-4 w-4 mr-2 text-red-400"),
-                DicomViewerState.error_message,
+                SeriesRoom.error_message,
                 class_name="m-4 flex items-center text-red-400 text-sm bg-red-900/20 p-3 rounded-lg border border-red-900/50",
             ),
         ),
         rx.cond(
-            DicomViewerState.total_images > 0,
-            rx.el.div(
-                metadata_panel(),
-                rx.el.div(
-                    rx.cond(
-                        DicomViewerState.view_mode == "mpr",
-                        three_views(),
-                        rx.fragment(
-                            WheelArea.create(
-                                rx.image(
-                                    src=DicomViewerState.current_image_base64,
-                                    style={
-                                        "transform": f"translate({DicomViewerState.pan_x}px, {DicomViewerState.pan_y}px) scale({DicomViewerState.zoom_level})",
-                                        "transition": "transform 0.1s ease-out",
-                                    },
-                                    class_name="max-h-full max-w-full object-contain pointer-events-none select-none",
-                                    alt="DICOM Image",
-                                ),
-                                on_wheel=DicomViewerState.scroll_slices.throttle(60),
-                                class_name="flex-1 min-h-0 bg-black relative flex items-center justify-center overflow-hidden w-full",
-                            ),
-                            slice_bar(),
-                        ),
-                    ),
-                    class_name="flex flex-col flex-1 min-w-0",
-                ),
-                viewer_sidebar(),
-                drawer_backdrop(),
-                class_name="flex flex-1 overflow-hidden min-h-0",
+            DicomViewerState.gone,
+            message_screen(
+                "folder-x",
+                "This series isn't here any more",
+                "Its folder was moved, renamed or deleted, or the link is not complete.",
+                "series-gone",
             ),
-            empty_viewer(),
+            rx.match(
+                SeriesRoom.status,
+                (
+                    "ready",
+                    rx.cond(SeriesRoom.total_images > 0, viewer_body(), opening_screen()),
+                ),
+                (
+                    "error",
+                    message_screen("triangle-alert", "The images can't be opened", SeriesRoom.open_error, "open-error"),
+                ),
+                opening_screen(),
+            ),
         ),
         tutorial_dialog(),
+        rx.cond(DicomViewerState.series != "", page_hooks()),
+        incoming_call(),
         class_name="flex flex-col h-screen w-screen bg-slate-950 text-slate-100 font-['Inter'] overflow-hidden",
     )

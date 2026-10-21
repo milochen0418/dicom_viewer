@@ -1,4 +1,5 @@
-"""State of the folder page: the folder shown and which subfolders hold DICOM."""
+"""State of the folder page: the folder shown, which subfolders hold DICOM, and who is
+looking at which series right now."""
 
 from __future__ import annotations
 
@@ -9,8 +10,7 @@ import time
 
 import reflex as rx
 
-from dicom_viewer import folders
-from dicom_viewer.states.dicom_state import DicomViewerState
+from dicom_viewer import folders, links, viewers
 
 # Subfolder checks reach the page at most this often (seconds).
 _PUBLISH_INTERVAL = 0.3
@@ -34,6 +34,9 @@ class FolderEntry:
     # The folder of the (downloaded) images the annotations belong to.
     opens: str = ""
     error: str = ""
+    # Link ids (/viewer/<id>) of the folder's images and of `opens`.
+    series_id: str = ""
+    opens_id: str = ""
 
 
 @dataclasses.dataclass
@@ -59,8 +62,11 @@ def _rows(
     names: list[str],
     summaries: dict[str, folders.FolderSummary],
     present: dict[str, str] | None = None,
+    root: str = "",
 ) -> list[FolderEntry]:
-    """`present` maps the series on disk to their folders; None while folders are still being checked."""
+    """`present` maps the series on disk to their folders; None while folders are still being checked.
+
+    With the DICOM `root`, rows get the link ids of their series."""
     rows = []
     for name in names:
         path = os.path.join(folder, name)
@@ -87,9 +93,20 @@ def _rows(
                 missing_count=len(missing),
                 opens=opens,
                 error=summary.error,
+                series_id=links.id_of(path, root) if root and summary.dicom_count else "",
+                opens_id=links.id_of(opens, root) if root and opens else "",
             )
         )
     return rows
+
+
+def _live() -> tuple[dict[str, int], dict[str, str]]:
+    """How many people are on each series, and their names."""
+    watching = viewers.watching()
+    return (
+        {sid: len(people) for sid, people in watching.items()},
+        {sid: ", ".join(p["name"] for p in people) for sid, people in watching.items()},
+    )
 
 
 class FolderBrowserState(rx.State):
@@ -104,6 +121,11 @@ class FolderBrowserState(rx.State):
     here_label: str = ""
     here_missing: str = ""  # series this folder's annotations need, not downloaded
     here_opens: str = ""  # the folder of the images this folder's annotations belong to
+    here_id: str = ""  # link ids of this folder's images and of here_opens
+    here_opens_id: str = ""
+    # Series id -> how many people are looking at it, and who (refreshed every few seconds).
+    live_count: dict[str, int] = {}
+    live_names: dict[str, str] = {}
     loading: bool = False
     checking: bool = False
     error: str = ""
@@ -146,6 +168,15 @@ class FolderBrowserState(rx.State):
     @rx.event
     def refresh(self):
         return FolderBrowserState.browse_to(self.path or self.root)
+
+    @rx.event
+    def refresh_live(self):
+        """Periodic: who is looking at what changes all the time."""
+        count, names = _live()
+        if count != self.live_count:
+            self.live_count = count
+        if names != self.live_names:
+            self.live_names = names
 
     @rx.event
     def images_fetched(self, data: dict):
@@ -211,6 +242,8 @@ class FolderBrowserState(rx.State):
             self.here_label = ""
             self.here_missing = ""
             self.here_opens = ""
+            self.here_id = ""
+            self.here_opens_id = ""
             self.loading = True
             self.error = ""
         try:
@@ -240,12 +273,16 @@ class FolderBrowserState(rx.State):
         async with self:
             if generation != self._generation:
                 return
-            self.entries = _rows(target, listing.folders, {})
+            root = os.path.normpath(self.root)
+            self.entries = _rows(target, listing.folders, {}, root=root)
             self.here_dicom_count = here.dicom_count
             self.here_annotation_count = here.annotation_count
             self.here_label = here.label
             self.here_missing = ",".join(here_missing)
             self.here_opens = here_opens
+            self.here_id = links.id_of(target, root) if here.dicom_count else ""
+            self.here_opens_id = links.id_of(here_opens, root) if here_opens else ""
+            self.live_count, self.live_names = _live()
             self.loading = False
             self.checking = bool(listing.folders)
             self.last_folder = target
@@ -261,19 +298,19 @@ class FolderBrowserState(rx.State):
                 async with self:
                     if generation != self._generation:
                         return
-                    self.entries = _rows(target, listing.folders, summaries)
+                    self.entries = _rows(target, listing.folders, summaries, root=root)
                 published = time.monotonic()
-        open_path = ""
+        open_id = ""
         async with self:
             if generation == self._generation:
                 self.entries = _rows(
-                    target, listing.folders, summaries, _present(summaries, here.series_uid, target)
+                    target, listing.folders, summaries, _present(summaries, here.series_uid, target), root=root
                 )
                 self.checking = False
                 wanted, self._open_after = self._open_after, ""
                 if wanted:
-                    open_path = next(
-                        (e.path for e in self.entries if e.series_uid == wanted), ""
+                    open_id = next(
+                        (e.series_id for e in self.entries if e.series_uid == wanted), ""
                     )
-        if open_path:
-            yield DicomViewerState.open_series(open_path)
+        if open_id:
+            yield rx.redirect(f"/viewer/{open_id}")

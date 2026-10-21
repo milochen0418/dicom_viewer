@@ -13,6 +13,10 @@ says what it is for and has a short tutorial, the folder page tells you
 which folders hold images, and the layout works on a phone as well as on a
 desktop.
 
+Every series has its own address. Send it to someone and you look at the
+same images together, as in a meeting: what one of you does, everyone sees,
+with the name of who did it, and **Call everyone** starts a call.
+
 ## Features
 
 - **Folder browser** rooted at your DICOM folder: breadcrumbs, the number
@@ -29,6 +33,9 @@ desktop.
   states (PR) found next to the series are drawn on the images and listed
   in a panel; every layer and every segment or ROI can be switched off, and
   the opacity is adjustable.
+- **Together**: a link to share for every series. Everyone on it sees the
+  same view and who is there; each change shows who made it; Call everyone
+  rings the others.
 - **Metadata panel**, with the patient name, ID and study date hidden
   behind a password.
 - **Responsive**: the side panels fold into drawers on narrow screens, and
@@ -51,7 +58,8 @@ the breadcrumb or **Up** to go back.
 
 Inside a collection, each series sits in its own folder, the layout data
 portals such as the Imaging Data Commons produce. Press **Open** on a folder
-with images. A folder holding an annotation object (here a SEG) is listed
+with images: the series opens at its own address, which you can share (see
+[Look together](#4-look-together)). A folder holding an annotation object (here a SEG) is listed
 too; its annotations are shown together with the images they belong to.
 
 ![Fetching the images an annotation needs](docs/images/fetch-images.png)
@@ -81,7 +89,35 @@ Moving through the series:
 | Any slice | the slider under the image |
 | Zoom and pan | the buttons under Zoom & Pan; Reset All restores the view and the window |
 
-### 4) Windowing: Auto and presets
+### 4) Look together
+
+![Two people on one series](docs/images/together.png)
+
+Each series has its own address, `/viewer/<id>`; the link button in the top
+bar copies it. Everyone who opens the link sees the same view: the slice,
+1 view or 3 views, the crosshair, the window, zoom and pan, and which
+annotations are shown. When someone changes any of them, everyone sees the
+change at once, with a badge over the image saying who did what, and that
+person's ring pulses in the top bar. Each person keeps their own side
+panels, the language of the descriptions, the tutorial, and the metadata
+password.
+
+The top bar shows who is on the series ("2 here"; several tabs of one
+person count once), as ReflexGrid shows who is on a workbook. People leave
+when they go back to the folders or close the tab; a tab that stops
+answering is dropped after 30 seconds. On the folder page, a series someone
+is looking at says so ("1 viewing"). Signed in through the App Store,
+people appear with their names; otherwise as guests.
+
+![An incoming call](docs/images/incoming-call.png)
+
+**Call everyone** rings everyone on the series: they get an incoming call to
+accept or decline, and people who come later see **Join call · N**. The call
+runs in a call app installed in the App Store (an app that offers
+`call.join`, as ReflexGrid's calls do); when none is installed, the button
+says so.
+
+### 5) Windowing: Auto and presets
 
 ![Windowing with the Bone preset](docs/images/windowing.png)
 
@@ -98,7 +134,7 @@ the sliders. Reset All does the same and also resets zoom and pan.
 
 ![Preset tutorial](docs/images/preset-tutorial.png)
 
-### 5) Three views
+### 6) Three views
 
 ![Three views](docs/images/three-views.png)
 
@@ -109,7 +145,7 @@ crosshair panel shows the position in patient millimetres and the pixel
 value (in HU for CT). Switching back to **1 view** shows the scanned image
 the crosshair is on.
 
-### 6) Annotations
+### 7) Annotations
 
 ![Annotations in one view](docs/images/annotations-one-view.png)
 
@@ -131,7 +167,7 @@ same frame of reference are drawn where the images line up.
 The interface behind this, and how to add a format, is described in
 [docs/annotations_interface.md](docs/annotations_interface.md).
 
-### 7) On a phone
+### 8) On a phone
 
 <p>
   <img src="docs/images/phone-one-view.png" width="30%" alt="One view on a phone">
@@ -140,8 +176,8 @@ The interface behind this, and how to add a format, is described in
 </p>
 
 Below the desktop width the Metadata and Controls panels open as drawers
-from the buttons in the top bar, and three views show one plane at a time,
-with tabs to switch.
+from the buttons in the top bar, who is here and the call buttons move to a
+second row, and three views show one plane at a time, with tabs to switch.
 
 ## Configuration
 
@@ -151,10 +187,12 @@ with tabs to switch.
 | `DICOM_METADATA_PASSWORD` | `dicom` | Unlocks the patient name, ID and study date in the metadata panel. |
 | `DDNS_INTENT_URL_DICOM_DATA_EXPLORER` | `https://dicom-data-explorer.reflex-ddns.com` | Where **Get images** opens DICOM Data Explorer; point it at a local copy (e.g. `http://localhost:3100`) when developing. |
 | `DDNS_INTENT_TRUST_LOCALHOST` | unset | `1` lets the two apps talk when both run on localhost. |
+| `DICOM_VIEWER_CALL_APP` | unset | The call app every call opens. Unset, whoever calls first chooses among the installed ones, and everyone joins that one. |
+| `DDNS_INTENT_PROVIDER_CALL_JOIN` | unset | For development without the App Store: the call app that offers calls (with `DDNS_INTENT_URL_<APP>` its address). |
 
-**Get images** is available when the viewer is installed with the
-`reflex_ddns_auth` library (the App Store does this); without it the button
-is simply not shown.
+**Get images**, **Call everyone** and signing in are available when the
+viewer is installed with the `reflex_ddns_auth` library (the App Store does
+this); without it those buttons are simply not shown and everyone is a guest.
 
 ## Data
 
@@ -229,7 +267,12 @@ poetry run pytest
 | `dicom_viewer/series.py` | Reading a series: slice order, the file's window, rendering to PNG |
 | `dicom_viewer/volume.py` | Stacking a series into a volume and cutting it for three views |
 | `dicom_viewer/annotations/` | The annotation interface and the SEG, SR, RTSTRUCT and PR adapters |
-| `dicom_viewer/states/` | Reflex state: the folder page and the viewer |
-| `dicom_viewer/components/` | The pages: folder browser, viewer, three views |
+| `dicom_viewer/windowing.py` | The windowing presets and what each is for, in four languages |
+| `dicom_viewer/links.py` | The series' addresses: an id from the folder's place below the DICOM folder |
+| `dicom_viewer/viewers.py` | Who is looking at which series |
+| `dicom_viewer/call.py` | Calls on a series (the DDNS Intent `call.join`, as in ReflexGrid) |
+| `dicom_viewer/api.py` | The backend route a closing tab says goodbye on (listed in `backend-paths.txt`) |
+| `dicom_viewer/states/` | Reflex state: the folder page, each person's viewer, and the room everyone on a series shares (`room.py`), whose pictures `series_work.py` draws once for all |
+| `dicom_viewer/components/` | The pages: folder browser, viewer, three views, who is here, calls |
 | `assets/tutorials/` | The windowing tutorials in four languages |
 | `tests/` | Unit tests (`poetry run pytest`) |

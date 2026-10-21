@@ -29,12 +29,12 @@ def _plural(count, one: str, many: str):
     return rx.cond(count == 1, f"1 {one}", f"{count} {many}")
 
 
-def open_button(path, label: str, large: bool = False) -> rx.Component:
+def open_button(series_id, label: str, large: bool = False) -> rx.Component:
+    """Goes to the series' own address, which can be shared."""
     return rx.el.button(
         rx.icon("play", class_name="h-4 w-4 mr-1.5 fill-current"),
         label,
-        on_click=DicomViewerState.open_series(path),
-        disabled=DicomViewerState.opening,
+        on_click=rx.redirect("/viewer/" + series_id),
         class_name=(
             "flex items-center whitespace-nowrap rounded-lg font-medium text-white "
             "bg-blue-600 hover:bg-blue-500 transition-colors shadow-lg "
@@ -69,6 +69,20 @@ def fetch_button(missing, label, large: bool = False) -> rx.Component:
             "flex items-center whitespace-nowrap rounded-lg font-medium text-amber-100 "
             "bg-amber-700/80 hover:bg-amber-600 transition-colors shadow-lg "
             + ("px-5 py-2.5 text-sm" if large else "px-3 py-1.5 text-xs")
+        ),
+    )
+
+
+def live_badge(series_id) -> rx.Component:
+    """Who is looking at the series right now (as ReflexGrid's list shows who is editing)."""
+    count = FolderBrowserState.live_count[series_id]
+    return rx.cond(
+        (series_id != "") & (count > 0),
+        rx.el.span(
+            rx.el.span(class_name="h-2 w-2 rounded-full bg-green-500 animate-pulse"),
+            count.to(str) + " viewing",
+            title=FolderBrowserState.live_names[series_id],
+            class_name="live-badge flex items-center gap-1.5 text-[10px] font-medium px-1.5 py-0.5 rounded bg-green-500/10 text-green-300 border border-green-500/30 shrink-0",
         ),
     )
 
@@ -160,9 +174,13 @@ def here_card() -> rx.Component:
                 class_name="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 shrink-0",
             ),
             rx.el.div(
-                rx.el.p(
-                    "This folder contains DICOM images",
-                    class_name="text-sm font-semibold text-slate-100",
+                rx.el.div(
+                    rx.el.p(
+                        "This folder contains DICOM images",
+                        class_name="text-sm font-semibold text-slate-100",
+                    ),
+                    live_badge(FolderBrowserState.here_id),
+                    class_name="flex items-center gap-2",
                 ),
                 rx.el.p(
                     _plural(FolderBrowserState.here_dicom_count, "image", "images"),
@@ -185,7 +203,7 @@ def here_card() -> rx.Component:
                 ),
                 class_name="flex-1 min-w-0",
             ),
-            open_button(FolderBrowserState.path, "Open in viewer", large=True),
+            open_button(FolderBrowserState.here_id, "Open in viewer", large=True),
             class_name="flex items-center gap-4 m-4 p-4 rounded-xl bg-slate-800/60 border border-emerald-500/30",
         ),
     )
@@ -227,7 +245,7 @@ def here_annotation_card() -> rx.Component:
             rx.el.div(
                 rx.cond(
                     FolderBrowserState.here_opens != "",
-                    open_button(FolderBrowserState.here_opens, "Open images", large=True),
+                    open_button(FolderBrowserState.here_opens_id, "Open images", large=True),
                 ),
                 rx.cond(
                     FolderBrowserState.here_missing != "",
@@ -319,6 +337,7 @@ def folder_row(entry: FolderEntry) -> rx.Component:
                         ),
                     ),
                     rx.cond(has_dicom, rx.el.span("DICOM", class_name=DICOM_BADGE)),
+                    live_badge(rx.cond(has_dicom, entry.series_id, entry.opens_id)),
                     rx.cond(
                         entry.path == DicomViewerState.series_path,
                         rx.el.span(
@@ -341,12 +360,12 @@ def folder_row(entry: FolderEntry) -> rx.Component:
         ),
         rx.cond(
             has_dicom,
-            rx.el.div(open_button(entry.path, "Open"), class_name="pr-4 shrink-0"),
+            rx.el.div(open_button(entry.series_id, "Open"), class_name="pr-4 shrink-0"),
             rx.cond(
                 (entry.opens != "") | (entry.missing != ""),
                 rx.el.div(
                     # Downloaded images: open them, the annotation comes along.
-                    rx.cond(entry.opens != "", open_button(entry.opens, "Open")),
+                    rx.cond(entry.opens != "", open_button(entry.opens_id, "Open")),
                     rx.cond(entry.missing != "", fetch_button(entry.missing, entry.label)),
                     class_name="flex items-center gap-2 pr-4 shrink-0",
                 ),
@@ -398,38 +417,14 @@ def empty_state() -> rx.Component:
     )
 
 
-def opening_overlay() -> rx.Component:
-    return rx.cond(
-        DicomViewerState.opening,
-        rx.el.div(
-            rx.el.div(
-                rx.el.div(
-                    rx.el.div(
-                        class_name="animate-spin rounded-full h-5 w-5 border-2 border-slate-600 border-t-blue-400"
-                    ),
-                    rx.el.span("Opening images…", class_name="font-medium text-slate-100"),
-                    class_name="flex items-center gap-3",
-                ),
-                rx.el.div(
-                    rx.el.div(
-                        class_name="h-full bg-blue-500 transition-all",
-                        style={"width": f"{DicomViewerState.opening_percent}%"},
-                    ),
-                    class_name="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden mt-4",
-                ),
-                rx.el.p(
-                    rx.cond(
-                        DicomViewerState.opening_total > 0,
-                        f"Reading {DicomViewerState.opening_done} of {DicomViewerState.opening_total} files",
-                        "Looking for DICOM files…",
-                    ),
-                    class_name="text-xs text-slate-400 mt-2 font-mono",
-                ),
-                class_name="w-80 bg-slate-900 border border-slate-700 rounded-xl p-5 shadow-2xl",
-            ),
-            class_name="fixed inset-0 z-50 bg-slate-950/70 flex items-center justify-center",
-        ),
-    )
+_REFRESH_JS = """
+if (window.__dvListRefresh) clearInterval(window.__dvListRefresh);
+window.__dvListRefresh = setInterval(function () {
+    var el = document.getElementById('live-refresh');
+    if (!el) { clearInterval(window.__dvListRefresh); window.__dvListRefresh = null; return; }
+    el.click();
+}, 8000);
+"""
 
 
 def folder_page() -> rx.Component:
@@ -444,16 +439,6 @@ def folder_page() -> rx.Component:
                 class_name="text-sm text-slate-400 mt-2 flex flex-wrap items-center gap-1",
             ),
             class_name="mb-6",
-        ),
-        rx.cond(
-            DicomViewerState.open_error != "",
-            rx.el.div(
-                message_banner(
-                    DicomViewerState.open_error,
-                    on_dismiss=DicomViewerState.dismiss_open_error,
-                ),
-                class_name="mb-4",
-            ),
         ),
         rx.el.div(
             toolbar(),
@@ -479,6 +464,13 @@ def folder_page() -> rx.Component:
             ),
             class_name="bg-slate-900/60 border border-slate-800 rounded-xl overflow-hidden",
         ),
-        opening_overlay(),
+        rx.el.button(
+            id="live-refresh",
+            on_click=FolderBrowserState.refresh_live,
+            on_mount=rx.call_script(_REFRESH_JS),
+            tab_index=-1,
+            aria_hidden="true",
+            class_name="sr-only",
+        ),
         class_name="max-w-3xl mx-auto w-full px-4 py-10",
     )
