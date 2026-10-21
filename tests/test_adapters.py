@@ -12,6 +12,7 @@ import pytest
 
 import dicom_viewer.annotations.builtin  # noqa: F401 - registers the adapters
 from dicom_viewer.annotations import (
+    PALETTE,
     Layer,
     SeriesInfo,
     SliceRef,
@@ -21,6 +22,7 @@ from dicom_viewer.annotations import (
     load_layers,
     series_info,
     slice_ref,
+    spread,
 )
 from dicom_viewer.annotations.support import polygon_mask
 from tests import synth
@@ -98,10 +100,78 @@ def test_seg_masks_by_source_image_and_by_position(tmp_path, ct):
     assert any("another series" in note for note in layer.notes)
     assert int(layer.overlay(refs_of(other)[1]).masks[0].pixels.sum()) == 16
     assert layer.overlay(refs_of(other)[2]).is_empty()
-    # A different image size is never drawn.
+    # A bigger image whose grid holds the frame's (same origin and spacing): drawn in place.
     big = synth.ct_series(tmp_path / "big", rows=16, columns=16, frame_of_reference=ct[0].FrameOfReferenceUID, write=False)
-    assert layer.overlay(refs_of(big)[1]).is_empty()
-    assert layer.label_volume(refs_of(big)) is None
+    placed = layer.overlay(refs_of(big)[1]).masks[0].pixels
+    assert placed.shape == (16, 16) and int(placed.sum()) == 16 and placed[2:6, 2:6].all()
+    assert layer.label_volume(refs_of(big)).shape == (3, 16, 16)
+    # Another spacing would need resampling: never drawn.
+    fine = synth.ct_series(
+        tmp_path / "fine", rows=16, columns=16, spacing=(0.5, 0.5), frame_of_reference=ct[0].FrameOfReferenceUID, write=False
+    )
+    assert layer.overlay(refs_of(fine)[1]).is_empty()
+
+
+def test_seg_cropped_to_its_box_is_placed_on_the_image(tmp_path, ct):
+    # Some research objects store each frame on a crop of the image grid, without image references.
+    from pydicom.pixels import pack_bits
+
+    masks = np.zeros((3, 8, 8, 1), dtype=bool)
+    masks[1, 3:6, 4:7, 0] = True  # rows 3..5, columns 4..6 of the middle slice
+    seg = synth.seg_for(ct, masks, labels=("Tumor",))
+    frames = seg.pixel_array.reshape(-1, 8, 8)
+    top, left = 2, 3
+    seg.Rows, seg.Columns = 4, 5
+    seg.PixelData = pack_bits(np.ascontiguousarray(frames[:, top : top + 4, left : left + 5]).astype(np.uint8))
+    for group in seg.PerFrameFunctionalGroupsSequence:
+        position = group.PlanePositionSequence[0]
+        x, y, z = (float(v) for v in position.ImagePositionPatient)
+        position.ImagePositionPatient = [x + left, y + top, z]  # 1 mm pixels, axial
+        if "DerivationImageSequence" in group:
+            del group.DerivationImageSequence
+    if "ReferencedSeriesSequence" in seg:
+        del seg.ReferencedSeriesSequence
+    path = synth.save(seg, tmp_path / "cropped.dcm")
+    layer = load_one(path, series_info(refs_of(ct)))
+    placed = layer.overlay(refs_of(ct)[1]).masks[0].pixels
+    assert placed.shape == (8, 8) and int(placed.sum()) == 9 and placed[3:6, 4:7].all()
+    assert layer.overlay(refs_of(ct)[0]).is_empty()
+    assert int((layer.label_volume(refs_of(ct))[1] == 1).sum()) == 9
+    # Half a pixel off the image's grid: not drawn.
+    for group in seg.PerFrameFunctionalGroupsSequence:
+        position = group.PlanePositionSequence[0]
+        x, y, z = (float(v) for v in position.ImagePositionPatient)
+        position.ImagePositionPatient = [x + 0.5, y + 0.5, z]
+    seg.SOPInstanceUID = pydicom.uid.generate_uid()
+    shifted = load_one(synth.save(seg, tmp_path / "shifted.dcm"), series_info(refs_of(ct)))
+    assert shifted.overlay(refs_of(ct)[1]).is_empty()
+
+
+def test_objects_without_colours_get_their_own_and_their_maker_names_them(tmp_path, ct):
+    masks = np.zeros((3, 8, 8, 1), dtype=bool)
+    masks[1, 2:6, 2:6, 0] = True
+    paths = []
+    for reader in (1, 2, 3):
+        seg = synth.seg_for(ct, masks, labels=("Tumor",))
+        seg.ContentCreatorName = f"Study^Reader {reader}"
+        if "SeriesDescription" in seg:
+            del seg.SeriesDescription
+        paths.append(synth.save(seg, tmp_path / f"reader{reader}.dcm"))
+    coloured = synth.seg_for(ct, masks, labels=("Tumor",), colors={"Tumor": (60.0, 60.0, 40.0)})
+    paths.append(synth.save(coloured, tmp_path / "coloured.dcm"))
+    layers = [load_one(path, series_info(refs_of(ct))) for path in paths]
+    assert [layer.name for layer in layers[:3]] == ["Study Reader 1", "Study Reader 2", "Study Reader 3"]
+    # Each adapter alone picks the palette's first colour ...
+    assert {layer.items[0].color for layer in layers[:3]} == {PALETTE[0]}
+    own = layers[3].items[0].color
+    spread(layers)
+    # ... spread across the objects, they differ, and colours the files gave stay.
+    colours = [layer.items[0].color for layer in layers]
+    assert len(set(colours[:3])) == 3 and own not in colours[:3]
+    assert colours[3] == own and layers[3].items[0].own_color
+    assert layers[0].item("1").color == colours[0]  # what drawing looks up
+    spread(layers)  # again (a rescan): the same colours
+    assert [layer.items[0].color for layer in layers] == colours
 
 
 @pytest.mark.skipif(not (os.path.isdir(KITS_CT) and os.path.isdir(KITS_SEG)), reason="KiTS sample not downloaded")

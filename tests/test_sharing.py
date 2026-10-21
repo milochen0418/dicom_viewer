@@ -7,7 +7,7 @@ import os
 import pytest
 
 from dicom_viewer import links, viewers
-from dicom_viewer.states.room import slider_keys_after
+from dicom_viewer.states.room import pointers_after, slider_keys_after
 
 
 @pytest.fixture(autouse=True)
@@ -150,3 +150,18 @@ def test_a_drag_keeps_the_draggers_key_and_moves_everyone_elses():
     state = slider_keys_after(*state, "ben", drag=True)  # then Ben drags
     assert seen(state, "ben") == ben_key
     assert seen(state, "amy") != amy_key
+
+
+def test_pointers_follow_each_person_and_leave_the_picture():
+    amy = {"peer": "pa", "name": "Amy", "color": "#f00"}
+    ben = {"peer": "pb", "name": "Ben", "color": "#0f0"}
+    pointers = pointers_after({}, amy, 0.25, 0.5, 1)
+    assert pointers == {"pa": {"peer": "pa", "name": "Amy", "color": "#f00", "x": "25.00%", "y": "50.00%", "rev": "1"}}
+    pointers = pointers_after(pointers, ben, 1.0, 0.0, 2)
+    pointers = pointers_after(pointers, amy, 0.3, 0.5, 3)  # Amy moves: one pointer, a new rev
+    assert sorted(pointers) == ["pa", "pb"]
+    assert (pointers["pa"]["x"], pointers["pa"]["rev"]) == ("30.00%", "3")
+    # Off the picture (or no picture: -1) takes the pointer away; others stay.
+    assert sorted(pointers_after(pointers, amy, -1, -1, 4)) == ["pb"]
+    assert sorted(pointers_after(pointers, ben, 0.5, 1.2, 4)) == ["pa"]
+    assert pointers_after({}, {"peer": ""}, 0.5, 0.5, 1) == {}

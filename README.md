@@ -102,6 +102,10 @@ person's ring pulses in the top bar. Each person keeps their own side
 panels, the language of the descriptions, the tutorial, and the metadata
 password.
 
+To show the others a spot, move the mouse over the picture (on a phone, drag
+a finger over it) in 1 view: they see a dot in your colour with your name,
+which fades once you stop.
+
 Sent in Relack, the link comes with a card: the series' label, how many
 images it has and their size, and a picture of the slice the people on it
 are looking at, in their window. Until someone moves off the first slice,
@@ -115,7 +119,8 @@ person count once), as ReflexGrid shows who is on a workbook. People leave
 when they go back to the folders or close the tab; a tab that stops
 answering is dropped after 30 seconds. On the folder page, a series someone
 is looking at says so ("1 viewing"). Signed in through the App Store,
-people appear with their names; otherwise as guests.
+people appear with their names (a Relack guest with their nickname);
+otherwise as guests.
 
 ![An incoming call](docs/images/incoming-call.png)
 
@@ -168,7 +173,11 @@ the Annotations section of the controls:
 Each layer and each segment or ROI has its own switch, the opacity slider
 applies to all of them, and the refresh button looks for annotation files
 again after you download some. Annotations made for another series in the
-same frame of reference are drawn where the images line up.
+same frame of reference are drawn where the images line up, and so are
+segmentations stored on a crop of the image grid. Objects that bring no
+colours of their own get different colours, so that several readers'
+segmentations of one tumour can be told apart; a segmentation without a
+series description is named after who made it.
 
 ![Annotations in three views](docs/images/annotations-three-views.png)
 

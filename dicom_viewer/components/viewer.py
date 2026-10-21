@@ -1,4 +1,5 @@
 import reflex as rx
+from reflex.event import no_args_event_spec
 from reflex_components_core.core.window_events import WindowEventListener
 
 from dicom_viewer.components.call_views import call_button, incoming_call
@@ -6,6 +7,7 @@ from dicom_viewer.components.three_views import three_views
 from dicom_viewer.components.together import (
     actor_badge,
     page_hooks,
+    pointer,
     presence,
     share_button,
     slider_key,
@@ -31,10 +33,28 @@ def _slice_key_spec(e: rx.Var) -> tuple[rx.Var[str]]:
     )
 
 
+# Where the pointer is, as a fraction of the picture's frame (which zoom and pan move);
+# -1 when there is no picture.
+_POINT_JS = (
+    "(function (ev, vertical) { var f = ev.currentTarget.querySelector('.dv-frame');"
+    " var r = f && f.getBoundingClientRect(); if (!r || !r.width || !r.height) return -1;"
+    " return vertical ? (ev.clientY - r.top) / r.height : (ev.clientX - r.left) / r.width; })"
+)
+
+
+def _point_spec(e: rx.Var) -> tuple[rx.Var[float], rx.Var[float]]:
+    return (
+        rx.Var(f"{_POINT_JS}({e}, false)").to(float),
+        rx.Var(f"{_POINT_JS}({e}, true)").to(float),
+    )
+
+
 class WheelArea(rx.el.Div):
-    """A div that reports mouse-wheel movement."""
+    """A div that reports mouse-wheel movement, and where a mouse or finger points."""
 
     on_wheel: rx.EventHandler[_wheel_spec]
+    on_pointer_move: rx.EventHandler[_point_spec]
+    on_pointer_leave: rx.EventHandler[no_args_event_spec]
 
 
 class SliceKeys(WindowEventListener):
@@ -859,17 +879,28 @@ def viewer_body() -> rx.Component:
                 three_views(),
                 rx.fragment(
                     WheelArea.create(
-                        rx.image(
-                            src=SeriesRoom.current_image_base64,
+                        # The picture and the pointers on it, zoomed and panned together.
+                        rx.el.div(
+                            rx.image(
+                                src=SeriesRoom.current_image_base64,
+                                # The area's size (a size container), not the frame's.
+                                style={"maxHeight": "100cqh", "maxWidth": "100cqw"},
+                                class_name="block object-contain pointer-events-none select-none",
+                                alt="DICOM Image",
+                            ),
+                            rx.foreach(SeriesRoom.pointer_list, pointer),
                             style={
                                 "transform": f"translate({SeriesRoom.pan_x}px, {SeriesRoom.pan_y}px) scale({SeriesRoom.zoom_level})",
                                 "transition": "transform 0.1s ease-out",
                             },
-                            class_name="max-h-full max-w-full object-contain pointer-events-none select-none",
-                            alt="DICOM Image",
+                            class_name="dv-frame relative",
                         ),
                         actor_badge(),
                         on_wheel=DicomViewerState.scroll_slices.throttle(60),
+                        on_pointer_move=DicomViewerState.point.throttle(50),
+                        on_pointer_leave=DicomViewerState.point(-1.0, -1.0),
+                        # A finger on the picture points instead of scrolling the page.
+                        style={"containerType": "size", "touchAction": "none"},
                         class_name="flex-1 min-h-0 bg-black relative flex items-center justify-center overflow-hidden w-full",
                     ),
                     slice_bar(),

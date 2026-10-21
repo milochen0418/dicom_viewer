@@ -229,7 +229,8 @@ class DicomViewerState(rx.State):
         else:
             if not self._guest:
                 self._guest = str(random.randint(1000, 9999))
-            user, name = f"guest-{self._guest}", f"Guest {self._guest}"
+            # A Relack guest is signed in with a nickname but no email: keep the nickname.
+            user, name = f"guest-{self._guest}", name or f"Guest {self._guest}"
         me = {"peer": self._peer, "user": user, "name": name, "email": email, "avatar": avatar, "color": (self.me or {}).get("color", "")}
         if me != self.me:
             self.me = me
@@ -455,6 +456,14 @@ class DicomViewerState(rx.State):
         room = await self._room()
         if room is not None:
             room._pan(dx, dy, self._actor())
+
+    @rx.event
+    async def point(self, x: float, y: float):
+        """Shows the others where this person points on the picture (x, y are fractions of
+        it); a point off the picture takes the pointer away."""
+        room = await self._room()
+        if room is not None:
+            room._point(self._actor(), x, y)
 
     # ------------------------------------------------------------ 3 views
 

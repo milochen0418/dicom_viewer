@@ -161,6 +161,21 @@ def actor_badge(plane: str = "") -> rx.Component:
     )
 
 
+def pointer(p) -> rx.Component:
+    """Where someone else points on the picture, with their name; it fades out once they
+    stop moving (each move gives it a new key, which starts it again)."""
+    return rx.cond(
+        p["peer"] != ME,
+        rx.el.div(
+            rx.el.span(class_name="dv-pointer-dot", style={"backgroundColor": p["color"]}),
+            rx.el.span(p["name"], class_name="dv-pointer-name", style={"backgroundColor": p["color"]}),
+            key=p["peer"].to(str) + "-" + p["rev"].to(str),
+            class_name="dv-pointer",
+            style={"left": p["x"], "top": p["y"], "transform": f"scale({SeriesRoom.pointer_scale})"},
+        ),
+    )
+
+
 _HOOKS_JS = f"""
 if (window.__dvPing) clearInterval(window.__dvPing);
 window.__dvPing = setInterval(function () {{
@@ -208,4 +223,8 @@ STYLE = """
 .dv-person { display: flex; border: 2px solid; border-radius: 9999px; background: #0f172a; margin-left: -6px; }
 @keyframes dv-ring { from { box-shadow: 0 0 0 0 currentColor; } to { box-shadow: 0 0 0 6px transparent; } }
 .dv-acting { animation: dv-ring 0.9s ease-out 3; }
+/* Where someone points: a dot with their name, on the picture, kept at one size. */
+.dv-pointer { position: absolute; width: 0; height: 0; z-index: 10; pointer-events: none; transform-origin: 0 0; animation: dv-fade 3s ease-out forwards; }
+.dv-pointer-dot { position: absolute; left: -9px; top: -9px; width: 18px; height: 18px; border-radius: 9999px; border: 2px solid #fff; box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.35), 0 0 12px rgba(255, 255, 255, 0.45); }
+.dv-pointer-name { position: absolute; left: 12px; top: 10px; white-space: nowrap; padding: 2px 8px; border-radius: 9999px; font-size: 12px; font-weight: 600; color: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5); }
 """

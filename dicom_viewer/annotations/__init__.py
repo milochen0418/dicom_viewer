@@ -6,7 +6,7 @@ they need (highdicom, pydicom); nothing here needs more than pydicom,
 numpy and Pillow. See docs/annotations_interface.md.
 """
 
-from dicom_viewer.annotations.colors import PALETTE, cielab_to_rgb, default_color, dicom_cielab_to_rgb
+from dicom_viewer.annotations.colors import PALETTE, cielab_to_rgb, default_color, dicom_cielab_to_rgb, spread
 from dicom_viewer.annotations.compose import compose, overlay_from_labels, render
 from dicom_viewer.annotations.geometry import (
     basis,
@@ -52,7 +52,7 @@ from dicom_viewer.annotations.registry import (
 )
 
 __all__ = [
-    "PALETTE", "cielab_to_rgb", "default_color", "dicom_cielab_to_rgb",
+    "PALETTE", "cielab_to_rgb", "default_color", "dicom_cielab_to_rgb", "spread",
     "compose", "overlay_from_labels", "render",
     "basis", "find_slice", "find_slice_for_point", "normal", "plane_distance",
     "same_grid", "same_plane", "series_info", "slice_ref", "to_patient", "to_pixels",

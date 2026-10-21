@@ -95,9 +95,10 @@ class RtStructLayer(BaseLayer):
                 color = tuple(int(c) for c in color) if color is not None else None
             except (TypeError, ValueError):
                 color = None
-            if color is None or len(color) != 3:
+            own_color = color is not None and len(color) == 3
+            if not own_color:
                 color = default_color(index)
-            items.append(Item(item_id, names.get(number, f"ROI {number}"), color, "contour"))
+            items.append(Item(item_id, names.get(number, f"ROI {number}"), color, "contour", own_color=own_color))
             for contour in roi_contour.get("ContourSequence", []):
                 data = np.asarray(contour.get("ContourData", []), dtype=float)
                 if data.size < 3 or data.size % 3:

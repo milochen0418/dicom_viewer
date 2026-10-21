@@ -65,8 +65,11 @@ def _frame_table(seg) -> tuple[dict[str, list[tuple[int, int]]], list[tuple[Slic
     """Per source image, its (frame index, segment) pairs; and every frame's (geometry, segment)."""
     by_source: dict[str, list[tuple[int, int]]] = collections.defaultdict(list)
     refs = []
+    # All frames of one segment may name it once, in the shared functional group.
+    shared = seg.get("SharedFunctionalGroupsSequence")
+    shared_segment = _segment_of(shared[0]) if shared else 0
     for index, frame in enumerate(seg.get("PerFrameFunctionalGroupsSequence", [])):
-        segment = _segment_of(frame)
+        segment = _segment_of(frame) or shared_segment
         for uid in _sources_of(frame):
             by_source[uid].append((index, segment))
         refs.append((geometry.slice_ref(seg, frame_number=index + 1), segment))
@@ -100,9 +103,14 @@ class SegLayer(BaseLayer):
             algorithm = enum_name(getattr(description, "algorithm_type", ""))
             label = text(description, "SegmentLabel") or f"Segment {number}"
             items.append(
-                Item(str(number), label, color, "mask", description=algorithm.replace("_", " ").capitalize())
+                Item(
+                    str(number), label, color, "mask",
+                    description=algorithm.replace("_", " ").capitalize(), own_color=lab is not None,
+                )
             )
-        name = text(seg, "SeriesDescription") or text(seg, "ContentLabel") or "Segmentation"
+        # Without a series description, who made it tells one reader's object from another's.
+        creator = text(seg, "ContentCreatorName").replace("^", " ").strip()
+        name = text(seg, "SeriesDescription") or creator or text(seg, "ContentLabel") or "Segmentation"
         notes = []
         if self._kind == "FRACTIONAL":
             notes.append("Fractional segmentation: pixels at or above half the maximum value are shown.")
@@ -152,15 +160,25 @@ class SegLayer(BaseLayer):
         return masks
 
     def _by_position(self, ref: SliceRef) -> np.ndarray | None:
-        """Frames whose plane and grid match `ref`, for images the object does not name."""
+        """Frames whose grid is part of `ref`'s, for images the object does not name, in
+        `ref`'s shape: the same grid, or one cropped to the segment's box (whole pixels)."""
         if not ref.has_geometry:
             return None
-        matching = [
-            (index, segment)
-            for index, (frame_ref, segment) in enumerate(self._frame_refs)
-            if geometry.same_grid(frame_ref, ref)
-        ]
-        return self._masks_of(matching) if matching else None
+        masks = None
+        for index, (frame_ref, segment) in enumerate(self._frame_refs):
+            offset = geometry.grid_offset(frame_ref, ref)
+            if offset is None:
+                continue
+            if masks is None:
+                masks = np.zeros((*ref.shape, len(self._numbers)), dtype=bool)
+            frame = self._masks_of([(index, segment)])
+            # The part of the frame inside the image.
+            top, left = offset
+            r0, c0 = max(0, top), max(0, left)
+            r1, c1 = min(ref.rows, top + frame.shape[0]), min(ref.columns, left + frame.shape[1])
+            if r0 < r1 and c0 < c1:
+                masks[r0:r1, c0:c1] |= frame[r0 - top : r1 - top, c0 - left : c1 - left]
+        return masks
 
     def masks_for(self, ref: SliceRef) -> np.ndarray | None:
         """(rows, columns, segments) bool for a slice; None when no frame lies on it."""
@@ -172,7 +190,7 @@ class SegLayer(BaseLayer):
         masks = None
         try:
             frames = self._by_source.get(ref.sop_instance_uid)
-            if frames:
+            if frames and ref.shape == self._shape:
                 masks = self._masks_of(frames)
             else:
                 masks = self._by_position(ref)
@@ -188,10 +206,8 @@ class SegLayer(BaseLayer):
 
     def overlay(self, ref: SliceRef, item_ids: Iterable[str] | None = None) -> SliceOverlay:
         out = SliceOverlay()
-        if ref.shape != self._shape:
-            return out
         masks = self.masks_for(ref)
-        if masks is None:
+        if masks is None or masks.shape[:2] != ref.shape:
             return out
         for item in self.selected(item_ids):
             mask = masks[..., self._numbers.index(int(item.id))]
@@ -200,13 +216,13 @@ class SegLayer(BaseLayer):
         return out
 
     def label_volume(self, refs: Sequence[SliceRef]) -> np.ndarray | None:
-        if not refs or any(ref.shape != self._shape for ref in refs):
+        if not refs or any(ref.shape != refs[0].shape for ref in refs):
             return None
         dtype = np.uint8 if len(self._numbers) < 256 else np.uint16
-        labels = np.zeros((len(refs), *self._shape), dtype=dtype)
+        labels = np.zeros((len(refs), *refs[0].shape), dtype=dtype)
         for k, ref in enumerate(refs):
             masks = self.masks_for(ref)
-            if masks is None:
+            if masks is None or masks.shape[:2] != ref.shape:
                 continue
             areas = masks.reshape(-1, masks.shape[-1]).sum(axis=0)
             # Bigger segments first, so the small ones stay visible where they overlap.

@@ -183,6 +183,28 @@ def same_grid(
     return float(np.linalg.norm(np.subtract(a.position, b.position))) <= tolerance_mm
 
 
+def grid_offset(
+    frame: SliceRef, ref: SliceRef, *, tolerance_mm: float = 0.5, angle_tolerance_deg: float = 1.0
+) -> tuple[int, int] | None:
+    """(rows, columns) from the top-left pixel of `ref` to that of `frame`, when `frame`'s
+    pixel grid is part of `ref`'s: one plane, the same orientation and spacing, shifted by
+    whole pixels (within `tolerance_mm`). None otherwise. A mask cropped to its object's
+    box this way fits the image without resampling; (0, 0) for the same grid."""
+    if not same_plane(frame, ref, tolerance_mm=tolerance_mm, angle_tolerance_deg=angle_tolerance_deg):
+        return None
+    if not np.allclose(frame.pixel_spacing, ref.pixel_spacing, rtol=1e-3, atol=1e-4):
+        return None
+    if not np.allclose(frame.orientation, ref.orientation, atol=1e-3):
+        return None
+    origin, row_dir, col_dir, _ = basis(ref)
+    shift = np.subtract(frame.position, origin)
+    between_rows, between_columns = ref.pixel_spacing
+    rows, columns = float(shift @ col_dir) / between_rows, float(shift @ row_dir) / between_columns
+    whole = round(rows), round(columns)
+    off = math.hypot((rows - whole[0]) * between_rows, (columns - whole[1]) * between_columns)
+    return whole if off <= tolerance_mm else None
+
+
 def find_slice(
     target: SliceRef,
     candidates: Sequence[SliceRef],

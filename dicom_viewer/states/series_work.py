@@ -325,6 +325,9 @@ def publish(room: SeriesRoom, series_id: str) -> None:
     peers = viewers.tabs(series_id)
     if list(room.peers) != peers:
         room.peers = peers
+    here = {p["id"] for p in peers}
+    if any(peer not in here for peer in room.pointers):
+        room.pointers = {peer: p for peer, p in room.pointers.items() if peer in here}
     call.sync_room(room, series_id)
 
 
@@ -809,6 +812,7 @@ async def _load_layers(series_id: str) -> None:
                 entry.by_path[path] = (by_path.get(path), failed.get(path, ""))
         found = [entry.by_path[path] for path in paths if path in entry.by_path]
         entry.layers = [layer for layer, _ in found if layer is not None]
+        annotations.spread(entry.layers)
         errors += [(path, entry.by_path[path][1]) for path in paths
                    if path in entry.by_path and entry.by_path[path][1]]
         _store_layers(key, entry)

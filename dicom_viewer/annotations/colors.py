@@ -28,6 +28,27 @@ def default_color(index: int) -> RGB:
     return PALETTE[index % len(PALETTE)]
 
 
+def spread(layers: Sequence) -> None:
+    """Palette colours for the items that brought none, counted across `layers`.
+
+    Each adapter numbers its own items, so several objects without colours (one
+    segmentation per reader, say) would all come out in the palette's first
+    colour. Colours some item brought itself are left out while others remain.
+    """
+    taken = {tuple(item.color) for layer in layers for item in layer.items if item.own_color}
+    free = [color for color in PALETTE if color not in taken] or list(PALETTE)
+    count = 0
+    for layer in layers:
+        colors = {}
+        for item in layer.items:
+            if not item.own_color:
+                colors[item.id] = free[count % len(free)]
+                count += 1
+        recolor = getattr(layer, "recolor", None)
+        if colors and recolor is not None:
+            recolor(colors)
+
+
 def cielab_to_rgb(lab: Sequence[float]) -> RGB:
     """CIELab (L* 0-100, a* and b* about -128..127) to sRGB 0-255, D65 white, clipped."""
     lightness, a, b = (float(x) for x in lab)

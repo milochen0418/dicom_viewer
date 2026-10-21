@@ -144,7 +144,7 @@ replaces it.
 | `Mask(item_id, pixels)` | `pixels`: bool array `(rows, columns)` | Converted to bool on construction. |
 | `Shape(item_id, kind, points, closed=False)` | `points`: float array `(n, 2)` of `(column, row)` | Kinds and point layouts follow DICOM graphic objects: `polyline` 2+ points (`closed` joins the ends); `polygon` 3+ points, always closed; `point` 1 point; `circle` 2 points, centre then any point on the circumference; `ellipse` 4 points, both ends of the major axis then both ends of the minor axis. |
 | `Label(item_id, text, anchor)` | `anchor`: `(column, row)` | Text drawn at the anchor with a dark halo. |
-| `Item(id, name, color, kind, description="")` | `color`: `(r, g, b)` 0-255; `kind`: `mask`, `contour`, `graphic`, `measurement` | The colour is the adapter's default (ROIDisplayColor, CIELab of a segment, or the palette); the UI may override it. |
+| `Item(id, name, color, kind, description="", own_color=True)` | `color`: `(r, g, b)` 0-255; `kind`: `mask`, `contour`, `graphic`, `measurement` | The colour is the adapter's default (ROIDisplayColor, CIELab of a segment, or the palette); the UI may override it. `own_color` is False when the object gave none and the adapter took the palette's. |
 
 `SliceOverlay.extend(other)` appends another overlay's primitives;
 `is_empty()` and `item_ids()` are there for the renderer.
@@ -161,6 +161,7 @@ replaces it.
 | `plane_distance(ref, points_mm)` | Signed distance of points from the slice plane, along its normal. |
 | `same_plane(a, b, tolerance_mm=0.5, angle_tolerance_deg=1.0)` | Same frame of reference, parallel, and within tolerance. |
 | `same_grid(a, b, ...)` | Same plane, same origin, spacing, orientation and size: a mask of one fits the other unchanged. |
+| `grid_offset(frame, ref, ...)` | `(rows, columns)` from `ref`'s top-left pixel to `frame`'s when `frame`'s grid is part of `ref`'s (same plane, orientation and spacing, a whole-pixel shift), else `None`: a mask cropped to its object's box goes there unchanged. |
 | `find_slice(target, candidates, ...)` | The candidate nearest to `target`'s plane within tolerance, else `None`. |
 | `find_slice_for_point(point_mm, candidates, tolerance_mm=0.5)` | The candidate whose plane passes nearest a patient point; for contours and 3D coordinates that do not say which image they lie on. |
 
@@ -176,6 +177,11 @@ matching is half the slice spacing.
 - `cielab_to_rgb((L, a, b))`: the float form.
 - `default_color(index)`: a twelve-colour palette for objects that carry no
   colour (SR, GSPS), by the item's position in its layer.
+- `spread(layers)`: gives the items that took a palette colour (`own_color`
+  False) palette colours counted across all the layers of a series, leaving
+  out colours other items brought themselves; the viewer runs it on every
+  series' layers, so that, for example, five readers' segmentations without
+  colours don't all come out in the palette's first colour.
 
 ## 7. Drawing (`compose.py`)
 
@@ -244,7 +250,10 @@ How each adapter matches slices:
   `ignore_spatial_locations=True` because dcmqi output does not declare that
   spatial locations are preserved). Images the object does not name, from
   another series in the same frame of reference, get the frames whose plane
-  and grid match (`same_grid`). Masks are cached per slice (64 slices).
+  matches and whose grid is part of the image's (`grid_offset`: the same
+  grid, or one cropped to the segment's box), pasted in place. Masks are
+  cached per slice (64 slices). A segment named once in the shared
+  functional group applies to every frame.
 - **RTSTRUCT**: by `ContourImageSequence`, else by plane distance with a
   tolerance of half the gap between contour planes (0.5 mm when there is
   one plane). Contours of one ROI on one slice are unioned when filled, so
@@ -324,8 +333,9 @@ How each adapter matches slices:
 
 - **Same geometry only.** An annotation made on another series in the same
   frame of reference is drawn where its planes and grid coincide with the
-  open series' slices; resampling onto a different grid is not done. The
-  layer says so in `notes`.
+  open series' slices (for SEG, also a grid cropped from the image's by
+  whole pixels); resampling onto a different grid is not done. The layer
+  says so in `notes`.
 - **Overlap in volumes.** `label_volume` keeps one item per voxel (the
   smaller structure wins); the single view keeps per-item masks and shows
   overlaps faithfully.

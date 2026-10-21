@@ -180,6 +180,8 @@ class Item:
 
     `id` is unique within its layer and is what primitives refer to. `color`
     is (r, g, b) 0-255, the adapter's default; the UI may override it.
+    `own_color` is False when the object gave no colour and the adapter took
+    one from the palette.
     """
 
     id: str
@@ -187,6 +189,7 @@ class Item:
     color: RGB
     kind: ItemKind
     description: str = ""
+    own_color: bool = True
 
 
 @runtime_checkable
@@ -267,6 +270,14 @@ class BaseLayer:
 
     def item(self, item_id: str) -> Item:
         return self._items_by_id[item_id]
+
+    def recolor(self, colors: dict[str, RGB]) -> None:
+        """Gives the items listed in `colors` (by id) that colour."""
+        self.items = [
+            dataclasses.replace(item, color=colors[item.id]) if item.id in colors else item
+            for item in self.items
+        ]
+        self._items_by_id = {item.id: item for item in self.items}
 
     def selected(self, item_ids: Iterable[str] | None) -> list[Item]:
         """The items to draw: all of them for None, else those listed (unknown ids are ignored)."""

@@ -46,6 +46,23 @@ def slider_keys_after(key: int, hold: int, by: str, peer: str, drag: bool) -> tu
     return key + 1, hold, by
 
 
+def pointers_after(pointers: dict, actor: dict, x: float, y: float, rev: int) -> dict:
+    """The pointers once `actor` points at (x, y), fractions of the picture; a point off
+    the picture takes their pointer away. Each pointer carries the `rev` it was moved at."""
+    peer = actor.get("peer", "")
+    out = {key: value for key, value in pointers.items() if key != peer}
+    if peer and 0 <= x <= 1 and 0 <= y <= 1:
+        out[peer] = {
+            "peer": peer,
+            "name": actor.get("name", ""),
+            "color": actor.get("color", ""),
+            "x": f"{x * 100:.2f}%",
+            "y": f"{y * 100:.2f}%",
+            "rev": str(rev),
+        }
+    return out
+
+
 @dataclasses.dataclass
 class ItemView:
     """One toggleable thing of an annotation layer, as the panel shows it."""
@@ -150,6 +167,10 @@ class SeriesRoom(rx.SharedState):
     actor: dict[str, str] = {}
     actor_rev: int = 0
 
+    # Where people point on the picture in 1 view, by peer (see `pointers_after`).
+    pointers: dict[str, dict[str, str]] = {}
+    pointer_rev: int = 0
+
     # One entry per tab on the series: {"id", "user", "name", "color", "avatar"}.
     peers: list[dict[str, str]] = []
     # The series' call: how many are in it, who is ringing everyone (while it rings), the
@@ -179,6 +200,15 @@ class SeriesRoom(rx.SharedState):
     @rx.var
     def people_count(self) -> int:
         return len(self.people)
+
+    @rx.var
+    def pointer_list(self) -> list[dict[str, str]]:
+        return list(self.pointers.values())
+
+    @rx.var
+    def pointer_scale(self) -> float:
+        """Pointers sit on the zoomed picture but keep their size."""
+        return 1.0 / self.zoom_level if self.zoom_level else 1.0
 
     @rx.var
     def current_position_text(self) -> str:
@@ -392,3 +422,12 @@ class SeriesRoom(rx.SharedState):
     def _toggle_labels(self, actor: dict) -> None:
         self.show_annotation_labels = not self.show_annotation_labels
         self._act(actor, "Measurement text " + ("on" if self.show_annotation_labels else "off"))
+
+    def _point(self, actor: dict, x: float, y: float) -> bool:
+        """Shows where `actor` points (not a badge: pointing changes nothing)."""
+        pointers = pointers_after(self.pointers, actor, x, y, self.pointer_rev + 1)
+        if pointers == self.pointers:
+            return False
+        self.pointer_rev += 1
+        self.pointers = pointers
+        return True
