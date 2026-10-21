@@ -8,6 +8,11 @@ from dicom_viewer.api import BYE_PATH
 from dicom_viewer.states.dicom_state import AuthState, DicomViewerState
 from dicom_viewer.states.room import SeriesRoom
 
+try:
+    from reflex_ddns_auth.intent import Intent
+except ImportError:  # no DDNS libraries: no profiles to open
+    Intent = None
+
 # This tab, as the room names it.
 ME = DicomViewerState.me["peer"]
 
@@ -34,13 +39,18 @@ def peer_avatar(p) -> rx.Component:
             style={"backgroundColor": p["color"]},
         ),
     )
-    return rx.el.span(
+    signed_in = p["user"].to(str).contains("@")
+    return rx.el.button(
         face,
+        # Signed-in people have a profile (Relack's User Profile); guests have none.
+        on_click=rx.cond(signed_in, Intent.start("relack", "profile.view", label="User Profile", user=p["user"]), rx.noop()) if Intent is not None else rx.noop(),
+        disabled=~signed_in,
+        type="button",
         # A new key restarts the pulse.
         key=rx.cond(acting, p["id"].to(str) + "-" + SeriesRoom.actor_rev.to_string(), p["id"].to(str)),
         title=p["name"],
         custom_attrs={"data-name": p["name"]},
-        class_name=rx.cond(acting, "dv-person dv-acting", "dv-person"),
+        class_name=rx.cond(acting, "dv-person dv-acting enabled:cursor-pointer", "dv-person enabled:cursor-pointer"),
         style={"color": p["color"], "borderColor": p["color"]},
     )
 
@@ -56,6 +66,8 @@ def presence() -> rx.Component:
             id="people-count",
             class_name="text-xs text-slate-400 whitespace-nowrap",
         ),
+        # You, and signing in or out, go with the people here.
+        rx.el.div(identity(), class_name="flex items-center pl-2 ml-1 border-l border-slate-700"),
         id="presence",
         class_name="flex items-center gap-2 min-w-0",
     )

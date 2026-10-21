@@ -5,7 +5,6 @@ from dicom_viewer.components.call_views import call_button, incoming_call
 from dicom_viewer.components.three_views import three_views
 from dicom_viewer.components.together import (
     actor_badge,
-    identity,
     page_hooks,
     presence,
     share_button,
@@ -737,18 +736,6 @@ def top_bar() -> rx.Component:
                 view_mode_switch(),
                 drawer_button("metadata", "info", "Metadata"),
                 drawer_button("controls", "sliders-horizontal", "Controls"),
-                rx.cond(
-                    SeriesRoom.view_mode == "single",
-                    rx.el.div(
-                        rx.icon("layers", class_name="h-4 w-4 mr-2 text-blue-400"),
-                        rx.el.span(
-                            SeriesRoom.current_position_text,
-                            class_name="font-mono text-sm text-slate-300",
-                        ),
-                        title="Slice / slices in this series",
-                        class_name="hidden lg:flex items-center bg-slate-800 px-3 py-1.5 rounded-full border border-slate-700",
-                    ),
-                ),
                 class_name="flex items-center gap-2 sm:gap-3 lg:gap-6 shrink-0",
             ),
         ),
@@ -765,7 +752,6 @@ def people_bar() -> rx.Component:
         rx.el.div(
             call_button(),
             share_button(),
-            rx.el.div(identity(), class_name="hidden xl:flex items-center pl-3 border-l border-slate-700"),
             class_name="flex items-center gap-2 shrink-0",
         ),
         class_name="order-last lg:order-none basis-full lg:basis-auto flex items-center justify-between lg:justify-end gap-2 sm:gap-3 lg:pl-4 lg:border-l lg:border-slate-700",
