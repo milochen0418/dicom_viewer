@@ -102,6 +102,14 @@ person's ring pulses in the top bar. Each person keeps their own side
 panels, the language of the descriptions, the tutorial, and the metadata
 password.
 
+Sent in Relack, the link comes with a card: the series' label, how many
+images it has and their size, and a picture of the slice the people on it
+are looking at, in their window. Until someone moves off the first slice,
+where every series opens, the picture is the middle slice; with nobody on
+the series, it is in the Auto window. Nothing about the patient is on the
+card. Relack reads the card from `/_dicom_viewer/og/<id>`, since
+`/viewer/<id>` is the same page for every series.
+
 The top bar shows who is on the series ("2 here"; several tabs of one
 person count once), as ReflexGrid shows who is on a workbook. People leave
 when they go back to the folders or close the tab; a tab that stops
@@ -271,7 +279,8 @@ poetry run pytest
 | `dicom_viewer/links.py` | The series' addresses: an id from the folder's place below the DICOM folder |
 | `dicom_viewer/viewers.py` | Who is looking at which series |
 | `dicom_viewer/call.py` | Calls on a series (the DDNS Intent `call.join`, as in ReflexGrid) |
-| `dicom_viewer/api.py` | The backend route a closing tab says goodbye on (listed in `backend-paths.txt`) |
+| `dicom_viewer/api.py` | The backend's own routes, listed in `backend-paths.txt`: a closing tab's goodbye, and a link's card for chat apps |
+| `dicom_viewer/preview.py` | What a link to a series shows in a chat: its title, a line about it and a picture |
 | `dicom_viewer/states/` | Reflex state: the folder page, each person's viewer, and the room everyone on a series shares (`room.py`), whose pictures `series_work.py` draws once for all |
 | `dicom_viewer/components/` | The pages: folder browser, viewer, three views, who is here, calls |
 | `assets/tutorials/` | The windowing tutorials in four languages |
