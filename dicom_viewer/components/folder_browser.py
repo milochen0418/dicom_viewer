@@ -44,10 +44,11 @@ def open_button(series_id, label: str, large: bool = False) -> rx.Component:
     )
 
 
-def fetch_button(missing, label, large: bool = False) -> rx.Component:
+def fetch_button(missing, label, study, large: bool = False) -> rx.Component:
     """Opens DICOM Data Explorer in a dialog to download the series an annotation needs.
 
-    `missing` is the comma-separated SeriesInstanceUIDs; `label` names the annotation.
+    `missing` is the comma-separated SeriesInstanceUIDs; `label` names the annotation;
+    `study` is its StudyInstanceUID, which a PACS needs to find the series.
     Without the DDNS libraries there is nothing to open, so nothing is shown.
     """
     if Intent is None:
@@ -63,6 +64,7 @@ def fetch_button(missing, label, large: bool = False) -> rx.Component:
             label="Get images",
             series=missing,
             title=label,
+            study=study,
         ),
         title="Download the images this annotation belongs to, with DICOM Data Explorer",
         class_name=(
@@ -249,7 +251,7 @@ def here_annotation_card() -> rx.Component:
                 ),
                 rx.cond(
                     FolderBrowserState.here_missing != "",
-                    fetch_button(FolderBrowserState.here_missing, FolderBrowserState.here_label, large=True),
+                    fetch_button(FolderBrowserState.here_missing, FolderBrowserState.here_label, FolderBrowserState.here_study, large=True),
                 ),
                 class_name="flex items-center gap-2 shrink-0",
             ),
@@ -366,7 +368,7 @@ def folder_row(entry: FolderEntry) -> rx.Component:
                 rx.el.div(
                     # Downloaded images: open them, the annotation comes along.
                     rx.cond(entry.opens != "", open_button(entry.opens_id, "Open")),
-                    rx.cond(entry.missing != "", fetch_button(entry.missing, entry.label)),
+                    rx.cond(entry.missing != "", fetch_button(entry.missing, entry.label, entry.study)),
                     class_name="flex items-center gap-2 pr-4 shrink-0",
                 ),
             ),

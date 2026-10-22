@@ -31,6 +31,7 @@ class FolderEntry:
     # Series the annotations need that are not downloaded, comma-separated.
     missing: str = ""
     missing_count: int = 0
+    study: str = ""  # their study, for DICOM Data Explorer to find them on a PACS
     # The folder of the (downloaded) images the annotations belong to.
     opens: str = ""
     error: str = ""
@@ -91,6 +92,7 @@ def _rows(
                 series_uid=summary.series_uid,
                 missing=",".join(missing),
                 missing_count=len(missing),
+                study=summary.study_uid if missing else "",
                 opens=opens,
                 error=summary.error,
                 series_id=links.id_of(path, root) if root and summary.dicom_count else "",
@@ -120,6 +122,7 @@ class FolderBrowserState(rx.State):
     here_annotation_count: int = 0
     here_label: str = ""
     here_missing: str = ""  # series this folder's annotations need, not downloaded
+    here_study: str = ""  # their study
     here_opens: str = ""  # the folder of the images this folder's annotations belong to
     here_id: str = ""  # link ids of this folder's images and of here_opens
     here_opens_id: str = ""
@@ -241,6 +244,7 @@ class FolderBrowserState(rx.State):
             self.here_annotation_count = 0
             self.here_label = ""
             self.here_missing = ""
+            self.here_study = ""
             self.here_opens = ""
             self.here_id = ""
             self.here_opens_id = ""
@@ -279,6 +283,7 @@ class FolderBrowserState(rx.State):
             self.here_annotation_count = here.annotation_count
             self.here_label = here.label
             self.here_missing = ",".join(here_missing)
+            self.here_study = here.study_uid if here_missing else ""
             self.here_opens = here_opens
             self.here_id = links.id_of(target, root) if here.dicom_count else ""
             self.here_opens_id = links.id_of(here_opens, root) if here_opens else ""

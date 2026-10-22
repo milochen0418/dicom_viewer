@@ -447,7 +447,7 @@ def test_folder_rows_tell_which_series_are_missing():
     summaries = {
         "/x/ct": folders.FolderSummary(dicom_count=3, label="CT", series_uid="1.2.3"),
         "/x/seg": folders.FolderSummary(annotation_count=1, label="SEG", references=["1.2.3"]),
-        "/x/rt": folders.FolderSummary(annotation_count=1, label="RTSTRUCT", references=["1.2.3", "9.9.9"]),
+        "/x/rt": folders.FolderSummary(annotation_count=1, label="RTSTRUCT", references=["1.2.3", "9.9.9"], study_uid="1.2"),
     }
     checking = _rows("/x", ["ct", "seg", "rt", "new"], summaries)
     assert [row.missing for row in checking] == ["", "", "", ""]  # not known yet
@@ -457,5 +457,6 @@ def test_folder_rows_tell_which_series_are_missing():
     assert rows[0].series_uid == "1.2.3" and rows[0].missing == "" and rows[0].opens == ""
     assert rows[1].missing == "" and rows[1].missing_count == 0 and rows[1].opens == "/x/ct"
     assert rows[2].missing == "9.9.9" and rows[2].missing_count == 1 and rows[2].opens == "/x/ct"
+    assert rows[2].study == "1.2" and rows[1].study == ""  # only rows that need series pass it on
     assert _present(summaries, "7.7.7", "/x") == {"1.2.3": "/x/ct", "7.7.7": "/x"}
     assert _present(summaries, "1.2.3", "/x") == {"1.2.3": "/x/ct"}  # a folder's own images win nothing

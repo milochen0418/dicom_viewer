@@ -347,9 +347,10 @@ def test_needed_series_reads_every_format(tmp_path, ct):
     summary = folders.summarize_folder(str(tmp_path / "ann"))
     assert (summary.dicom_count, summary.annotation_count) == (0, 1)
     assert summary.series_uid == "" and summary.references == sorted(expected)
+    assert summary.study_uid == ct[0].StudyInstanceUID
     images = folders.summarize_folder(str(tmp_path))
     assert images.dicom_count == 3 and images.series_uid == ct[0].SeriesInstanceUID
-    assert images.references == []
+    assert images.references == [] and images.study_uid == ""
     assert folders.present_series(str(tmp_path)) == {}  # "ann" and "objects" hold no images
     (tmp_path / "images").mkdir()
     synth.ct_series(tmp_path / "images", series_uid="1.2.3.9")

@@ -149,6 +149,15 @@ def series_label(file_path: str) -> str:
     return series_facts(file_path)[0]
 
 
+def study_of(file_path: str) -> str:
+    """A file's StudyInstanceUID, or "" when it cannot be read."""
+    try:
+        ds = pydicom.dcmread(file_path, stop_before_pixels=True, specific_tags=["StudyInstanceUID"])
+    except Exception:
+        return ""
+    return str(ds.get("StudyInstanceUID", "") or "").strip()
+
+
 def present_series(parent: str) -> dict[str, str]:
     """The image series in the folders directly inside `parent`: SeriesInstanceUID -> folder."""
     found: dict[str, str] = {}
@@ -178,6 +187,7 @@ class FolderSummary:
     series_uid: str = ""  # of the images; "" for a folder without images
     # Series the annotations need, for a folder that holds annotations only.
     references: list[str] = dataclasses.field(default_factory=list)
+    study_uid: str = ""  # the annotations' study: a PACS finds those series within it
     error: str = ""
 
 
@@ -194,11 +204,13 @@ def summarize_folder(path: str, listing: Listing | None = None) -> FolderSummary
     images = [path for path in files if path not in set(annotations)]
     label, series_uid = series_facts((images or annotations)[0]) if files else ("", "")
     references: set[str] = set()
+    study_uid = ""
     if annotations and not images:
         from dicom_viewer.annotations import registry
 
         for path in annotations:
             references |= registry.needed_series(path)
+        study_uid = study_of(annotations[0])
     return FolderSummary(
         folder_count=len(listing.folders),
         dicom_count=len(images),
@@ -206,6 +218,7 @@ def summarize_folder(path: str, listing: Listing | None = None) -> FolderSummary
         label=label,
         series_uid=series_uid if images else "",
         references=sorted(references),
+        study_uid=study_uid,
     )
 
 
